@@ -1,6 +1,6 @@
 # BatteryLab
 
-We aim to build an autonomous laboratory for manufacturing coin-cell batteries. This automated system accelerates the research process of discovering/testing new electrolytes by automatically assembling batches of CR2032 coin-cell batteries. It uses 3 robotic arms, a liquid dispensing module, a linear rail, multiple 3D printed parts, and several cameras to achieve automation.
+This system is a semi-autonomous laboratory workstation for manufacturing CR2032 coin-cell batteries, aimed at accelerating the process of discovering/testing new electrolytes. It uses 2 robotic arms, a liquid dispensing module, a linear rail, a number of 3D printed parts, and several cameras to achieve this end.
 
 <figure>
   <img
@@ -9,15 +9,17 @@ We aim to build an autonomous laboratory for manufacturing coin-cell batteries. 
   <figcaption>Figure 1. The physical design of the autonomous BatteryLab</figcaption>
 </figure>
 
-## Get Started
+## Getting Started
 
 > We assume that the hardware has been set up properly as illustrated in Figure 1. We will address the hardware requirement in the next section for users that want to build the system from scratch.
 
-The code base can be separated to two parts.
+The code base can be separated to two parts:
 
-The first part is the `BatteryLab` directory, which contains code that directly controls the robot, suction system, linear rail, and all the utility functions that rely purely on Python. Users should create a virtual environment with `python -m venv lab_venv` to install the Python dependencies. Do not use conda environment because they work poorly with ROS 2.
+1. The `BatteryLab` directory, which contains code that directly controls the robot, suction system, linear rail, and all the utility functions that rely purely on Python. Users should create a virtual environment with `python -m venv lab_venv` to install the Python dependencies. Do not use conda environment because they work poorly with ROS 2.
 
-The second part is the `ros2_ws` directory, which contains several ROS 2 packages. ROS 2 is needed because we physically connect the cameras, linear rails, suction systems to different Raspberry Pis. They communicate with each other using ROS 2 services/topics. For instance, the assembly robot needs to use several cameras, controls the linear rail, and use the suction system to pick up battery components. The suction system and the arm camera is moving with the robotic arm while the fixed camera and linear rail control do not move with the robot. They have to be connected to different Raspberry Pis to avoid cable/pipe length problems.
+2. The `ros2_ws` directory, which contains several ROS2 packages. ROS (Robot Operating System) is a set of software libraries, needed because we physically connect the cameras, linear rails, suction systems to different Raspberry Pis. They communicate with each other using ROS 2 services/topics. For instance, the assembly robot needs to use several cameras, the linear rail, and the suction system to pick & place battery components. The suction system and arm camera are moving with the robotic arm while the fixed camera and linear rail controller do not move with the robot. They are connected to different Raspberry Pis to avoid cable and pipe length problems.
+
+### Installing and testing code dependencies
 
 You can install the Python dependencies with the following commands.
 
@@ -28,9 +30,9 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-Then you can use the `app.py` in the root folder to test each of the robot to ensure they work properly individually.
+Then you can use `app.py` in the root folder to test each of the robot to ensure they work properly individually.
 
-Ensure [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/Installation.html) is properly installed in your system. To make things easier, we recommend installing Ubuntu 24.04 to all the Raspberry Pis. You should be able to build the packages by the following commands. Since we use the `cv_bridge` package to transfer image data among ROS 2 nodes, you may encounter a numpy compatibility issue as listed in [Kown Issue 1](#known-issue-1).
+Ensure [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/Installation.html) is properly installed in your system. To make things easier, we recommend installing Ubuntu 24.04 to all the Raspberry Pis. You should be able to build the packages using the following commands. Since we use the `cv_bridge` package to transfer image data among ROS 2 nodes, you may encounter a numpy compatibility issue as discussed in [known issues](./docs/known_issues/cv_bridge_incompatible_with_Numpy2.0.md)
 
 ```bash
 source /opt/ros/jazzy/
@@ -42,14 +44,15 @@ You can ssh into each Raspberry Pi to launch each ROS 2 node or use the launch f
 
 > The launch file and the ROS 2 packages are still under development.
 
+### Launching the system
 Start all the necessary ROS 2 services by running the following commands on specified machines. Note that each of them should be run on different Raspberry Pis.
 
 ```bash
-# on the rail Raspberry Pi
+# on the Raspberry Pi mounted on the linear rail (rasp4):
 ros2 launch battery_lab_bringup rail_rasp.launch.py
-# on the board Raspberry Pi
+# on the Raspberry Pi mounted on the breadboard by the liquid dispenser (rasp5):
 ros2 launch battery_lab_bringup board_rasp.launch.py
-# on the outside Raspberry Pi
+# on the Raspberry Pi mounted outside the main breadboard (rasp5-hobbs):
 ros2 launch battery_lab_bringup out_rasp.launch.py
 ```
 
@@ -84,11 +87,11 @@ We use the following hardware items. You do not need to use the identical items 
 - 1 DIY [suction system](https://www.aliexpress.us/item/3256802124499190.html?spm=a2g0o.order_list.order_list_main.5.77f21802SE7IHi&gatewayAdapt=glo2usa).
 - 2 Raspberry Pi 5s and 1 Raspberry Pi 4.
 - 1 [TOB-DF-160](https://www.tobmachine.com/coin-cell-crimping-machine_c134?gad_source=1&gclid=Cj0KCQjwrKu2BhDkARIsAD7GBov9F47aTY1ZMRAuWiKtbsL2JQtdZlmeonXlnT11z4B-JgYZ6LxH1a0aAs9AEALw_wcB) Battery Crimper.
-- Many self-designed 3D printable parts.
+- Several 3D printable parts.
 
 ### The Assembly Robot
 
-The assembly robot is a Meca500 on the linear rail. We have a self-designed adaptor to mount a Raspberry Pi on the Zaber AP257-ENG4299 adaptor plate. The suction system can be mounted on top of the Raspberry Pi. There is a 8MP Arducam mounted to the MEGP-25 gripper. The customized gripper has two ending effects: (1) gripper to pick up the spring; (2) the suction cup to pick up other battery components.
+The assembly robot is a Meca500 on the linear rail. We used a 3D-printed adaptor to mount a Raspberry Pi on the Zaber AP257-ENG4299 adaptor plate. The suction system can be mounted on top of the Raspberry Pi. There is a 8MP Arducam mounted to the MEGP-25 gripper. The customized gripper has two ending effects: (1) a two-pronged gripper to pick up the spring; (2) a suction cup to pick up the other battery components.
 
 <figure>
   <img
@@ -110,7 +113,7 @@ The liquid handling robot is a Dobot MG400. We mount the Sartorius liquid dispen
 
 ### The Crimping & Storage Robot
 
-We use a second Meca500 to move the assembled battery to a crimper and then move it to the storage post. The gripper arm is self-designed. We also need a electronic crimper to the right of the robotic arm, which is not illustrated in the 3D design.
+We use a second Meca500 to move the assembled battery to a crimper and then back to the storage post. The gripper arm is 3D printed. We also need a electronic crimper to the right of the robotic arm, which is not illustrated in the 3D design.
 
 <figure>
   <img
@@ -119,20 +122,5 @@ We use a second Meca500 to move the assembled battery to a crimper and then move
   <figcaption>Figure 4. The design of the crimping & storage robot.</figcaption>
 </figure>
 
-## Known Issues
-
-### 1. prebuilt cv_bridge package is not compatible with Numpy 2.0
-
-<a name="known-issue-1"></a>
-We added a submodule to build the cv_bridge from source to fix this problem. You need to install the Boost Python library to build this package. The required packages can be installed by the following commands.
-
-```bash
-sudo apt update
-sudo apt install libboost-all-dev
-```
-
-And because we have a submodule in the repo. You may need to fetch the submodules before running `colcon build`.
-
-```bash
-git submodule update --init --recursive
-```
+## Documentation
+Further documentation (including troubleshooting, known issues, and future aims) can be found in the `docs` subfolder.

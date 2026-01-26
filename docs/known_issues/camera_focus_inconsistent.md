@@ -1,0 +1,4 @@
+# Overview
+When tuning the arm positioning for the washer/spring component, I noticed that slightly different positions yielded vastly different focus results. After taking a photo in position "A", then again in position "A" while holding my lab notebook directly above the robot arm (setting a visual backstop, effectively), the focus changed. I confirmed that the focus_automatic_continuous parameter on the lookup camera (/dev/video0 on rasp5) was still set to 0 (deactivated) during operation, and that the focus_absolute parameter had been left unchanged. 
+
+**Conclusion**: it seems that the Angetube lookup camera's focus is in some way digital rather than (fully) mechanical. Practically, this means that the sharpness/focus of an image will change based on BatteryLab's environment (physical placement, ambient lighting). 

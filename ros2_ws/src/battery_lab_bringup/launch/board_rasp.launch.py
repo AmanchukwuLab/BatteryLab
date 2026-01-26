@@ -9,6 +9,14 @@ from pathlib import Path
 def generate_launch_description():
 
     set_ros_domain_id = SetEnvironmentVariable("ROS_DOMAIN_ID", "42")
+    set_board_camera_focus = ExecuteProcess(
+        cmd=[[
+            'v4l2-ctl -d /dev/video0 ',
+            '--set-ctrl=focus_automatic_continuous=0 ',
+            '--set-ctrl=focus_absolute=500 '
+        ]],
+        shell=True
+    )
 
     return LaunchDescription(
         [
@@ -43,5 +51,6 @@ def generate_launch_description():
                 name="sartorius_dispensing_server",
                 output="screen",
             ),
+            set_board_camera_focus,
         ]
     )

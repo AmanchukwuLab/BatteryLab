@@ -134,7 +134,6 @@ class BreadBoardMeca500(Meca500):
         self.robot.WaitIdle(20)
         self.move_home(tool=RobotTool.SUCTION)
 
-
 def breadboard_meca500_example_app():
     robot_address = "192.168.0.101"
     user_provided_address = input(

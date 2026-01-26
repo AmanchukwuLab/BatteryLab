@@ -100,6 +100,9 @@ class AssemblyRobot(Node):
 
     def initialize_and_home_robots(self):
         self.load_position_files()
+        
+        robot_pos = self.assemblyRobotConstants.LOOKUP_CAM_SK_PO
+        self.logger.info(f"CHECK: LOOKUP_CAM_SK_PO = {robot_pos}") 
         ok = self.rail_meca500.initializeRobot()
         if not ok:
             print("The Meca500 cannot be connected")
@@ -227,6 +230,7 @@ class AssemblyRobot(Node):
         self.move_zaber_rail(rail_pos)
         self.rail_meca500.robot.MoveJoints(*mid_point_joints)
         self.rail_meca500.robot.WaitIdle(30)
+        print(f"Moving to camera position: {robot_pos}")
         self.rail_meca500.robot.MovePose(*robot_pos)
         self.rail_meca500.robot.WaitIdle(10)
         self.rail_meca500.robot.Delay(0.2)
@@ -309,6 +313,7 @@ class AssemblyRobot(Node):
         with open(position_file, "r") as f:
             try:
                 constant_positions = yaml.safe_load(f)
+                print("Loaded constant_positions for assembly robot!")
             except yaml.YAMLError as e:
                 print("Cannot load the well positions YAML file with error: ", e)
 
@@ -427,10 +432,20 @@ def get_location_index_from_user(shape, sub_location):
         index = shape[1] * coordinates[0] + coordinates[1]
     return index
 
+def get_user_confirmation(confirm='Y'):
+    '''Checks if user input matches the parameter 'confirm' (default: 'Y'), case sensitive. If user presses return (input=None), the function will not error.'''
+    response = '8.53973422267' # Nonsense to avoid false positives
+
+    while response != confirm:
+        if confirm == "":
+            response = input("Hit <Enter> to confirm and move on.")
+        else:
+            response = input(f"Type {confirm} to confirm and move on.")
+    return None
 
 def assembly_robot_command_loop(
     robot: AssemblyRobot,
-    image_path="/home/yuanjian/Research/BatteryLab/images/anode_case_photos",
+    image_path="/home/yuanjian/Research/BatteryLab/images",
 ):
     prompt = """Press [Enter] to quit.
 [S] to test component pick up (universal for suction/gripper).
@@ -553,6 +568,7 @@ def assembly_robot_command_loop(
         elif input_str == "L":
             # Move a component to the lookup camera for a picture
             results = get_component_location_from_user(robot, component_prompt)
+            shape, grabpos, railpos, sub_location, component_name = results[0]
             if len(results) != 1:
                 print("You can only move one component at a time. Operation aborted!")
                 continue
@@ -568,6 +584,7 @@ def assembly_robot_command_loop(
             image_file = str(
                 Path(image_path) / f"Lookup-{component_name}-{cur_time}.jpg"
             )
+            print(f"writing image to {image_file}")
             cv2.imwrite(image_file, image)
             robot.rail_meca500.move_home(tool=RobotTool.SUCTION)
             robot.grab_component(
