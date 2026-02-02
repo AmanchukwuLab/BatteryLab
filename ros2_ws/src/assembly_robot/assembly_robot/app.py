@@ -16,7 +16,9 @@ class AutoBatteryLab(Node):
             logger=logger, robot_address="192.168.0.100"
         )
         self.assembly_robot.initialize_and_home_robots()
+        self.assembly_robot.calibrate_machine_vision()
         self.assembly_robot.move_home_and_out_of_way()
+
         # Initialize the Liquid Robot
         self.liquid_robot = LiquidRobot(ip="192.168.0.107", logger=logger)
         ok = self.liquid_robot.initialize_robot()
@@ -139,6 +141,7 @@ def command_loop(batterylab: AutoBatteryLab):
 def main():
     rclpy.init()
     batterylab = AutoBatteryLab()
+    
     command_loop(batterylab)
     batterylab.destroy_node()
     rclpy.shutdown()

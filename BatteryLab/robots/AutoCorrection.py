@@ -14,16 +14,22 @@ class AutoCorrection():
 
     def __init__(self, logger: Logger):
         self.logger = logger
+        
+        # Load in configuration constants (parameters for HoughCircles)
         self.correction_config = AutoCorrectionConfig()
         self.cam_port_bottom = self.correction_config.CAM_PORT_BOTM
         self.cam_port_top = self.correction_config.CAM_PORT_TOP
+        self.vision_params_path = "vision_params.json"
+        self.vision_params = self.get_vision_params()
         pass
 
     def detect_object_center(self, img, object_config:dict):
+        # Image preprocessing
         img_color = np.copy(img)
         img_gray = cv2.cvtColor(img_color, cv2.COLOR_BGR2GRAY)
         img_gray = cv2.medianBlur(img_gray, 5)
-
+        
+        # Run detection algorithm
         circles = cv2.HoughCircles(img_gray, cv2.HOUGH_GRADIENT, 1, object_config['minDist'],
                                 param1=object_config['param1'], param2=object_config['param2'],
                                 minRadius=object_config['minR'], maxRadius=object_config['maxR'])
@@ -41,12 +47,86 @@ class AutoCorrection():
             self.logger.debug(f"sorted circles: {found_circles}")
             found_circles = found_circles[-1] if len(found_circles) > 0 else []
         return found_circles
-    
+
+    def get_vision_params(self):
+        try:
+            with open(self.vision_params_path, mode='r') as f:
+                return json.load(f)
+        except:
+            return {}
+
+    def write_vision_params(self):
+        with open(self.vision_params_path, mode='w') as f:
+            json.dump(self.vision_params, f)
+        print("vision_params.json modified")
+        return None
+   
+    def compute_conversion(self, img_centered, img_adjusted, dx, dy):
+    # Machine vision parameters tuned using ~/Research/BatteryLab/tests/CircleAutoDetection.py
+        img_width = min(img_centered.shape[:2])
+        object_config = {
+                'minDist': img_width//10, # We only want one circle, so set this large
+                'param1' : 250,           # Too high will miss edges, too low -> noisy edges
+                'param2' : 30,            # Higher is stricter (fewer circles)
+                'minR'   : img_width//10,
+                'maxR'   : img_width//5,
+                }
+        suction_config = object_config.copy()
+        suction_config['minR'] = img_width//20
+        suction_config['maxR'] = img_width//8
+
+        # Find circles in both images
+        found_circles_center = self.detect_object_center(img_centered, suction_config)
+
+        # Handle multiple circles found
+        if len(found_circles_center) == 0:
+            # If no circles found, save the image for later reference
+            cv2.imwrite("Suction_NoCircleDetected_center.png", img_centered)
+            raise ValueError("No circles found during calibration!")
+        elif type(found_circles_center[1]) != int:
+            msg = "Multiple circles found during machine vision calibration in image of centered suction cup!"
+            self.logger.info(msg)
+            print(f"found_circles_center: {found_circles_center}")
+            
+            # Save image for later reference
+            cv2.imwrite("Suction_MultDetected_center.png", img_centered)
+
+            # Only keep the circle with the smaller radius
+            radii = [row[1] for row in found_circles_center]
+            found_circles_center = found_circles_center[np.argmin(radii)]
+        
+        found_circles_adjust = self.detect_object_center(img_adjusted, suction_config)
+        if len(found_circles_adjust) == 0:
+            # If no circles found, save the image for later reference
+            cv2.imwrite("Suction_NoCircleDetected_adjust.png", img_centered)
+            raise ValueError("No circles found during calibration!")
+        elif type(found_circles_adjust[1]) != int:
+            msg = "Multiple circles found during machine vision calibration in image of adjusted suction cup!"
+            self.logger.info(msg)
+            print(f"found_circles_adjust: {found_circles_adjust}")
+            
+            # Save image for later reference
+            cv2.imwrite("Suction_MultDetected_adjust.png", img_centered)
+            
+            # Only keep the circle with the smaller radius
+            radii = [row[1] for row in found_circles_adjust]
+            found_circles_adjust = found_circles_adjust[np.argmin(radii)]
+
+        # Compute robot-pixel conversion factor
+        dx_image = found_circles_adjust[0][0] - found_circles_center[0][0]
+        dy_image = found_circles_adjust[0][1] - found_circles_center[0][1]
+        x_convert = dx/dx_image # robot space per pixel space
+        y_convert = dy/dy_image # robot space per pixel space
+
+        # Write conversion factors to machine vision params, then return to user
+        self.vision_params['x_convert'] = x_convert
+        self.vision_params['y_convert'] = y_convert
+        self.write_vision_params()
+        return x_convert, y_convert
+
     def project_to_3d(self, image_coordinates, H_mtx): 
         """
-        This method takes the Homography matrix and the 2d image cartesian coordinates. It returns the (x, y)
-        cartesian coordinates in 3d cartesian world coordinates on floor plane(at z=0). Notice that z coordinate is omitted
-        here and added inside the tracking funtion. 
+        This method takes the Homography matrix and the 2d image cartesian coordinates. It returns the (x, y) cartesian coordinates in 3d cartesian world coordinates on floor plane(at z=0). Notice that z coordinate is omitted here and added inside the tracking funtion. 
         
         Parameters
         ----------
@@ -80,12 +160,21 @@ class AutoCorrection():
         return img_output
 
     def get_offset(self, img, component:Components, state: AssemblySteps):
+        """Returns the image, a 6-element matrix with the corrections, and a boolean indicating whether or not the component was successfully picked up.
+            Note: ( failure mode) if a component is not detected, the algorithm attempts to detect the suction cup in the image to determine if perhaps the component was not picked up at all. If the suction cup is not detected, however, this function will return "True", assuming that the component detection algorithm was incorrect."""
+
+        # Get calibration data (homography matrix)
         calibration_file = Path(os.path.dirname(__file__)) / "data" / "calibration.json"
         with open(calibration_file, "r") as json_file:
-            # TODO: what is H_mtx?
+            # Note: H_mtx is a homography matrix, which encodes the distortion/translation of a plane in an image. In this case, it encodes the circle's distortion to get a more accurate measure of 'center'.
             H_mtx = np.array(json.load(json_file)[f"H_mtx_{state}"], dtype=np.float32)
+
+        # Attempt to find the component in the image
         detectedObj = self.detect_object_center(img, getattr(self.correction_config, f"{component.name}_{state}"))
+        
+        # Handle possible outcomes of attempted detection
         if len(detectedObj) > 0:
+            # something was detected
             xy = self.project_to_3d(detectedObj[0], H_mtx)
             img_output = self.draw_detection(img, detectedObj, f"Offset: {xy[:2]}")
             if component == Components.Separator and state == AssemblySteps.Grab:
@@ -95,20 +184,28 @@ class AutoCorrection():
             self.logger.info(f"{state.name} Offset detected: {xy}")
             return img_output, correction, True
         else:
+            # no circles found, try detecting suction cup
             detectedObj = self.detect_object_center(img, self.correction_config.Suction_Cup)
             if len(detectedObj) > 0:
+                # suction cup found
                 self.logger.info(f"Object {component.name} failed being grabbed!")
                 return img, np.array([0,0,0,0,0,0], dtype=np.float32), False
             else:
+                # nothing found
                 self.logger.info(f"Object {component.name} failed being deteced!")
-                # TODO: why return True here for grabbed?
+                # This returns true because it failed to detect the suction cup. 
+                # The assumption is that the suction cup detection algorithm is 
+                # unlikely to fail, so a failure here indicates that the component was 
+                # indeed picked up, just not detected.
                 return img, np.array([0,0,0,0,0,0], dtype=np.float32), True
 
     def take_img(self, state: AssemblySteps, component: Components, nr:int=None):
+        # Prepare directories to store metadata from detection
         self.time_stamp = time.strftime("%Y_%m_%d_%Hh_%Mm_%Ss", time.localtime())
         self.dir_name = Path(os.path.dirname(__file__)) / "Alignments" / self.time_stamp[:10] / f"Cell{nr}"
         org_dir = Path(os.path.dirname(__file__)) / "Alignments" / self.time_stamp[:10] / "Origin" / f"{component.name}_{state}"
         org_filename = org_dir /  f"[No{nr}]_{component.name}_{state}_{self.time_stamp[:10]}.jpg"
+
         if state == AssemblySteps.Grab:
             alpha = 1.0
             beta = 5
@@ -128,10 +225,13 @@ class AutoCorrection():
         else:
             self.logger.error(f"Camera {state} has lost its connection", exc_info=True)
             return
+
+        # Make storage directories if they don't exist yet
         if not self.dir_name.exists():
             os.makedirs(self.dir_name)
         if not org_dir.exists():
             os.makedirs(org_dir)
+
         # Write the img output
         cv2.imwrite(org_filename, img_output)
         return img

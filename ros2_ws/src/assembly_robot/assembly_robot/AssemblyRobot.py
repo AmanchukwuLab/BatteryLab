@@ -1,7 +1,7 @@
 #!/home/yuanjian/Research/BatteryLab/lab_venv/bin/python3
 from BatteryLab.robots.RailMeca500 import RailMeca500
 
-# from BatteryLab.robots.AutoCorrection import AutoCorrection
+from BatteryLab.robots.AutoCorrection import AutoCorrection
 from BatteryLab.robots.Constants import (
     AssemblyRobotConstants,
     AssemblyRobotCameraConstants,
@@ -51,7 +51,7 @@ class AssemblyRobot(Node):
         self.zaber_rail = LinearRailClient()
         self.assemblyRobotConstants = AssemblyRobotConstants()
         self.assemblyRobotCameraConstants = AssemblyRobotCameraConstants()
-        # self.auto_correction = AutoCorrection(logger=self.logger)
+        self.auto_correction = AutoCorrection(logger=self.logger)
         self.look_up_camera_client = ImageClient(
             node_name="assembly_robot_lookup_camera_client",
             serv_name="/batterylab/lookup_camera",
@@ -196,6 +196,9 @@ class AssemblyRobot(Node):
         self.get_logger().debug(f"Assembly Robot move request finished")
 
     def drop_current_component_to_assembly_post(self, order: int = 1):
+        # First, take a photo for fine adjustment
+        self.take_a_look_up_photo()
+        # Proceed placing component
         self.rail_meca500.move_home()
         current_tool = self.rail_meca500.get_current_tool()
         rail_pos = self.assemblyRobotConstants.POST_RAIL_LOCATION
@@ -212,10 +215,65 @@ class AssemblyRobot(Node):
         self.move_zaber_rail(rail_pos)
         self.rail_meca500.robot.MoveJoints(*mid_point_joints)
         self.rail_meca500.robot.WaitIdle(30)
+        # TODO here: adjust robot_pos using calibrated data (convert pixels to robot units)
         self.rail_meca500.pick_place(robot_pos, is_grab=False)
 
-    def take_a_look_up_photo(self):
-        self.rail_meca500.move_home()  # based on current
+
+    def calibrate_machine_vision(self, force = False):
+        """Used to:
+                1) take a picture and find the center of the suction cup (in pixels)
+                2) calibrate pixels-to-robot units by taking a picture at (defaultx+dx, defaulty+dy), using HoughCircles to find the center of the suction cup (in pixels), then computing x_convert = (dx/(x_pixel_original-x_pixel_new)) and similarly for y_convert.
+                3) store these variables in a calibration file for later reference.
+        The calibration parameters may already exist. Setting the optional parameter 'force' to True will force the system to recalibrate.
+        """
+        print("Starting machine vision calibration routine...")
+        # Check if calibration data already exists
+        if not force:
+            machine_vision_params = self.auto_correction.get_vision_params()
+            available_params = list(machine_vision_params.keys())
+            if "x_convert" in available_params and "y_convert" in available_params:
+                return None
+        
+        # Specify suction tool
+        self.rail_meca500.change_tool(RobotTool.SUCTION)
+        
+        # Take a picture of the empty suction cup
+        img_suction_center = self.take_a_look_up_photo(rehome=False)
+
+        # Take a picture with a slight adjustment
+        dx, dy = 10, 10 # Note: these are restricted to a max of 10 (trimmed in take_a_look_up_photo)
+        img_suction_adjust = self.take_a_look_up_photo(dx=dx, dy=dy, rehome=False)
+
+        # Circle finding algorithm finds suction easier with inverted images
+        img_suction_center = cv2.bitwise_not(img_suction_center)
+        img_suction_adjust = cv2.bitwise_not(img_suction_adjust)
+        
+        # Compute conversion factors
+        x_convert, y_convert = self.auto_correction.compute_conversion(img_suction_center, img_suction_adjust, dx, dy)
+        self.move_home_and_out_of_way()
+        return None
+
+    def take_a_look_up_photo(self, dx=0, dy=0, rehome=True):
+        """Homes the rail_meca500's arm position, moves to the lookup camera, then takes and returns a photo. 
+
+        Optional inputs:
+            dx: amount (in meca500 units) to adjust x position of lookup location
+                default = 0, limit = +-10
+            dy: amount (in meca500 units) to adjust y position of lookup location
+                default = 0, limit = +-10
+            rehome: if set to False, robot arm will not return to arm position home before running this routine. This is used in the machine vision calibration step, in which a photo is taken, then a small xy adjustment is made and another photo taken. Returning to the arm's home position would be unnecessary. 
+                default = True
+        """
+        # Enforce limits for dx and dy
+        d_limit = 10
+        dx = max(-d_limit, min(d_limit, dx))
+        dy = max(-d_limit, min(d_limit, dy))
+
+        # Home robot arm's position
+        if rehome:
+            self.rail_meca500.move_home()
+
+        # Get robot constants
         current_tool = self.rail_meca500.get_current_tool()
         rail_pos = self.assemblyRobotConstants.LOOKUP_CAM_RAIL_LOCATION
         if current_tool == RobotTool.SUCTION:
@@ -227,6 +285,14 @@ class AssemblyRobot(Node):
         else:
             self.get_logger().error("The current tool is invalid for a snapshot")
             return
+        
+        # Adjust robot_pos for calibration routine
+        if dx != 0:
+            robot_pos[0] += dx
+        if dy != 0:
+            robot_pos[1] += dy
+
+        # Move robot into position
         self.move_zaber_rail(rail_pos)
         self.rail_meca500.robot.MoveJoints(*mid_point_joints)
         self.rail_meca500.robot.WaitIdle(30)
@@ -234,6 +300,8 @@ class AssemblyRobot(Node):
         self.rail_meca500.robot.MovePose(*robot_pos)
         self.rail_meca500.robot.WaitIdle(10)
         self.rail_meca500.robot.Delay(0.2)
+
+        # Take and return picture
         # TODO: use get_image for storing the image or analysis
         for i in range(2):
             self.look_up_camera_client.send_request()
@@ -593,6 +661,7 @@ def assembly_robot_command_loop(
 
 
 def main():
+    # Initialize
     rclpy.init()
     # log_path = "/home/yuanjian/Research/BatteryLab/logs"
     # logger = Logger("assembly_robot_test", log_path, "assembly_robot_test.log")
@@ -600,7 +669,14 @@ def main():
     robot.initialize_and_home_robots()
     image_path = Path("/home/yuanjian/Research/BatteryLab/images/")
     image_path.mkdir(exist_ok=True)
+    
+    # Calibrate robot-to-pixel distances if needed
+    robot.calibrate_machine_vision() # TODO: test this function!
+
+    # Main loop
     assembly_robot_command_loop(robot, image_path=str(image_path))
+    
+    # End program
     robot.destroy_node()
     rclpy.shutdown()
 
