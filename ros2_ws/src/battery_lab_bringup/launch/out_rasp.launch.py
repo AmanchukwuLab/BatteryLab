@@ -16,7 +16,7 @@ def generate_launch_description():
             'v4l2-ctl -d /dev/video0 ',
             '--set-ctrl=white_balance_automatic=1 ',
             '--set-ctrl=focus_automatic_continuous=0 ',
-            '--set-ctrl=focus_absolute=100'        
+            '--set-ctrl=focus_absolute=255'        
         ]],
         shell=True
     )
@@ -58,7 +58,8 @@ def generate_launch_description():
                             1, # white_balance_automatic: Auto
                             0  # focus_automatic_continuous: Manual (Unlocks focus_absolute)
                         ],
-                        "focus_absolute": 200,
+                        "focus_absolute": 255,
+                        "brightness": 128,
                     }
                 ],
                 remappings=[("/image_raw", "/camera/tower_camera")],

@@ -1,0 +1,1 @@
+{"x_convert": -0.125, "y_convert": 0.125, "suction_center": [322, 254], "date_calibrated": "Mar_02_2026", "object_config": {"minDist": 160, "param1": 250, "param2": 30, "minR": 60, "maxR": 95}, "suction_config": {"minDist": 160, "param1": 150, "param2": 30, "minR": 30, "maxR": 50}}

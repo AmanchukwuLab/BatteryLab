@@ -41,6 +41,7 @@ class AssemblyRobot(Node):
         super().__init__("assembly_robot")
         self.suction_pump_client = SuctionPumpClient()
         self.logger = self.get_logger() if logger is None else logger
+        self.auto_correction = AutoCorrection(logger=self.logger)
         self.rail_meca500 = RailMeca500(
             logger=self.logger,
             robot_address=robot_address,
@@ -51,7 +52,6 @@ class AssemblyRobot(Node):
         self.zaber_rail = LinearRailClient()
         self.assemblyRobotConstants = AssemblyRobotConstants()
         self.assemblyRobotCameraConstants = AssemblyRobotCameraConstants()
-        self.auto_correction = AutoCorrection(logger=self.logger)
         self.look_up_camera_client = ImageClient(
             node_name="assembly_robot_lookup_camera_client",
             serv_name="/batterylab/lookup_camera",
@@ -171,7 +171,7 @@ class AssemblyRobot(Node):
 
     def move_home_and_out_of_way(self):
         self.rail_meca500.move_home(tool=RobotTool.SUCTION)
-        self.move_zaber_rail(0.0)
+        self.move_zaber_rail(40.0)
 
     def move_zaber_rail(self, rail_pos: float):
         self.logger.info(f"Assembly Robot Moving to {rail_pos}")
@@ -196,18 +196,20 @@ class AssemblyRobot(Node):
         self.get_logger().debug(f"Assembly Robot move request finished")
 
     def drop_current_component_to_assembly_post(self, order: int = 1):
-        # First, take a photo for fine adjustment
-        self.take_a_look_up_photo()
+        # First, take a photo and use to compute needed adjustment
+        img = self.take_a_look_up_photo()
+        dx, dy = self.auto_correction.get_offset_simple(img)
+
         # Proceed placing component
         self.rail_meca500.move_home()
         current_tool = self.rail_meca500.get_current_tool()
         rail_pos = self.assemblyRobotConstants.POST_RAIL_LOCATION
         if current_tool == RobotTool.SUCTION:
-            robot_pos = self.assemblyRobotConstants.POST_C_SK_PO
+            robot_pos = self.assemblyRobotConstants.POST_C_SK_PO.copy()
             robot_pos[2] += order * 0.05
             mid_point_joints = [-90, 0, 0, 0, 45, 0]
         elif current_tool == RobotTool.GRIPPER:
-            robot_pos = self.assemblyRobotConstants.POST_C_GRIPPER_PO
+            robot_pos = self.assemblyRobotConstants.POST_C_GRIPPER_PO.copy()
             mid_point_joints = [-90, 0, 0, 0, 0, 0]
         else:
             self.get_logger().error("The current tool is invalid for a snapshot")
@@ -215,7 +217,11 @@ class AssemblyRobot(Node):
         self.move_zaber_rail(rail_pos)
         self.rail_meca500.robot.MoveJoints(*mid_point_joints)
         self.rail_meca500.robot.WaitIdle(30)
-        # TODO here: adjust robot_pos using calibrated data (convert pixels to robot units)
+        
+        # Adjst robot_pos (pedestal drop coords) based on vision info
+        print(f"Adjusting robot_pos ({robot_pos}) by dx = {dx} and dy = {dy}") # DEBUGGING
+        robot_pos[0] += dx
+        robot_pos[1] += dy
         self.rail_meca500.pick_place(robot_pos, is_grab=False)
 
 
@@ -229,11 +235,25 @@ class AssemblyRobot(Node):
         print("Starting machine vision calibration routine...")
         # Check if calibration data already exists
         if not force:
-            machine_vision_params = self.auto_correction.get_vision_params()
-            available_params = list(machine_vision_params.keys())
-            if "x_convert" in available_params and "y_convert" in available_params:
+            vision_params = self.auto_correction.get_vision_params()
+            available_params = list(vision_params.keys())
+            needed = ['x_convert', 'y_convert', 'suction_center']
+            
+            ready = True
+            for needed_param in needed:
+                if needed_param not in available_params:
+                    print(f"{needed_param} not found in calibration file. Must recalibrate.")
+                    ready = False
+
+            # TODO: automatically check vision_params['date_calibrated']. If it's been a long time, force the system to re-calibrate.
+
+            if ready == True:
+                print("All calibration parameters found, moving on...")
+                self.vision_params = vision_params
                 return None
-        
+        else:
+            print("Calibration route forced via 'force' parameter. Recalibrating...")
+
         # Specify suction tool
         self.rail_meca500.change_tool(RobotTool.SUCTION)
         
@@ -241,33 +261,37 @@ class AssemblyRobot(Node):
         img_suction_center = self.take_a_look_up_photo(rehome=False)
 
         # Take a picture with a slight adjustment
-        dx, dy = 10, 10 # Note: these are restricted to a max of 10 (trimmed in take_a_look_up_photo)
-        img_suction_adjust = self.take_a_look_up_photo(dx=dx, dy=dy, rehome=False)
+        dx, dy = -15, -15 # Note: these are restricted to a max of 20 (trimmed in take_a_look_up_photo). 
+
+        img_suction_adjust = self.take_a_look_up_photo(dx=dx, dy=dy, rehome=False, midpoint=False)
 
         # Circle finding algorithm finds suction easier with inverted images
         img_suction_center = cv2.bitwise_not(img_suction_center)
         img_suction_adjust = cv2.bitwise_not(img_suction_adjust)
         
         # Compute conversion factors
-        x_convert, y_convert = self.auto_correction.compute_conversion(img_suction_center, img_suction_adjust, dx, dy)
+        self.vision_params = self.auto_correction.compute_conversion(img_suction_center, img_suction_adjust, dx, dy)
         self.move_home_and_out_of_way()
         return None
 
-    def take_a_look_up_photo(self, dx=0, dy=0, rehome=True):
+    def take_a_look_up_photo(self, dx=0, dy=0, rehome=True, midpoint=True):
         """Homes the rail_meca500's arm position, moves to the lookup camera, then takes and returns a photo. 
 
         Optional inputs:
             dx: amount (in meca500 units) to adjust x position of lookup location
-                default = 0, limit = +-10
+                default = 0, limit = +-20
             dy: amount (in meca500 units) to adjust y position of lookup location
-                default = 0, limit = +-10
+                default = 0, limit = +-20
             rehome: if set to False, robot arm will not return to arm position home before running this routine. This is used in the machine vision calibration step, in which a photo is taken, then a small xy adjustment is made and another photo taken. Returning to the arm's home position would be unnecessary. 
+            midpoint: if set to False, the robot arm will not move to the midpoint of its movement to the camera position. This is only used for the SECOND PHOTO of the calibrate_machine_vision routine, as moving back to the midpoint is unnecessary.
                 default = True
         """
         # Enforce limits for dx and dy
-        d_limit = 10
-        dx = max(-d_limit, min(d_limit, dx))
-        dy = max(-d_limit, min(d_limit, dy))
+        d_limit = 20
+        if dx != 0:
+            dx = max(-d_limit, min(d_limit, dx))
+        if dy != 0:
+            dy = max(-d_limit, min(d_limit, dy))
 
         # Home robot arm's position
         if rehome:
@@ -277,10 +301,11 @@ class AssemblyRobot(Node):
         current_tool = self.rail_meca500.get_current_tool()
         rail_pos = self.assemblyRobotConstants.LOOKUP_CAM_RAIL_LOCATION
         if current_tool == RobotTool.SUCTION:
-            robot_pos = self.assemblyRobotConstants.LOOKUP_CAM_SK_PO
+            # Need to make a copy due to possible modification (dx, dy)
+            robot_pos = self.assemblyRobotConstants.LOOKUP_CAM_SK_PO.copy()
             mid_point_joints = [-90, 0, 0, 0, 45, 0]
         elif current_tool == RobotTool.GRIPPER:
-            robot_pos = self.assemblyRobotConstants.LOOKUP_CAM_GRIPPER_PO
+            robot_pos = self.assemblyRobotConstants.LOOKUP_CAM_GRIPPER_PO.copy()
             mid_point_joints = [-90, 0, 0, 0, 0, 0]
         else:
             self.get_logger().error("The current tool is invalid for a snapshot")
@@ -293,8 +318,9 @@ class AssemblyRobot(Node):
             robot_pos[1] += dy
 
         # Move robot into position
-        self.move_zaber_rail(rail_pos)
-        self.rail_meca500.robot.MoveJoints(*mid_point_joints)
+        if midpoint:
+            self.move_zaber_rail(rail_pos)
+            self.rail_meca500.robot.MoveJoints(*mid_point_joints)
         self.rail_meca500.robot.WaitIdle(30)
         print(f"Moving to camera position: {robot_pos}")
         self.rail_meca500.robot.MovePose(*robot_pos)
@@ -447,8 +473,17 @@ class AssemblyRobot(Node):
 
 
 def get_component_location_from_user(robot, component_prompt):
-    component_name = input(component_prompt)
-    component = getattr(robot.assemblyRobotConstants, component_name)
+    success = False
+    while not success:
+        component_name = input(component_prompt)
+        try:
+            component = getattr(robot.assemblyRobotConstants, component_name)
+            success = True
+        except:
+            if component_name.lower() == 'exit' or component_name.lower() == 'e':
+                print("Cancelling operation...")
+                return None
+            print(f"Component '{component_name}' not recognized. Try again!")
     available_locations = list(component.keys())
     if len(available_locations) == 0:
         print(
@@ -472,8 +507,8 @@ def get_component_location_from_user(robot, component_prompt):
                 )
             )
     elif sub_location not in available_locations:
-        print("The sublocation you pick is not valid!")
-        exit()
+        print("The sublocation you picked is not valid! Operation aborted.")
+        return None
     else:
         location = component[sub_location]
         result.append(
@@ -487,7 +522,6 @@ def get_component_location_from_user(robot, component_prompt):
         )
     return result
 
-
 def get_location_index_from_user(shape, sub_location):
     assert len(shape) == 2
     index = input(
@@ -496,11 +530,15 @@ def get_location_index_from_user(shape, sub_location):
     try:
         index = int(index)
     except ValueError as e:
-        coordinates = ast.literal_eval(index)  # convert the input to a list
-        index = shape[1] * coordinates[0] + coordinates[1]
+        try:
+            coordinates = ast.literal_eval(index)  # convert the input to a list
+            index = shape[1] * coordinates[0] + coordinates[1]
+        except:
+            print(f"Error encountered parsing location '{index}'. Please try again.")
+            return -1
     return index
 
-def get_user_confirmation(confirm='Y'):
+def get_user_confirmation(confirm=''):
     '''Checks if user input matches the parameter 'confirm' (default: 'Y'), case sensitive. If user presses return (input=None), the function will not error.'''
     response = '8.53973422267' # Nonsense to avoid false positives
 
@@ -526,7 +564,7 @@ def assembly_robot_command_loop(
 :> """
 
     component_prompt = """Which type of component do you want to test? Choose from the following
-["CathodeCase", "Cathode", "Spacer", "SpacerExtra", "Anode", "Washer", "Separator", "AnodeCase"]
+["CathodeCase", "Cathode", "Spacer", "SpacerExtra", "Anode", "Washer", "Separator", "AnodeCase"] ("e" or "exit" to cancel)
 :> """
 
     while True:
@@ -539,6 +577,8 @@ def assembly_robot_command_loop(
         elif input_str == "S":
             # Test the components pick-up and put them back
             results = get_component_location_from_user(robot, component_prompt)
+            if results == None:
+                continue
             test_all = input(
                 f"Do you want to test the four corners or test all? (all/corners) default is corners:"
             )
@@ -576,6 +616,8 @@ def assembly_robot_command_loop(
         elif input_str == "M":
             # Move the component to the assembly post
             results = get_component_location_from_user(robot, component_prompt)
+            if results == None:
+                continue
             if len(results) != 1:
                 print(
                     "You can only move one component to the assembly post at a time. Operation aborted!"
@@ -594,6 +636,8 @@ def assembly_robot_command_loop(
         elif input_str == "G":
             # Grab a compoent or put it back
             results = get_component_location_from_user(robot, component_prompt)
+            if results == None:
+                continue
             if len(results) != 1:
                 print("You can only grab one component at a time. Operation aborted!")
                 continue
@@ -614,6 +658,8 @@ def assembly_robot_command_loop(
         elif input_str == "Z":
             # Manual adjustment for well positions.
             results = get_component_location_from_user(robot, component_prompt)
+            if results == None:
+                continue
             if len(results) != 1:
                 print("You can only adjust one component at a time. Operation aborted!")
                 continue
@@ -636,6 +682,8 @@ def assembly_robot_command_loop(
         elif input_str == "L":
             # Move a component to the lookup camera for a picture
             results = get_component_location_from_user(robot, component_prompt)
+            if results == None:
+                continue
             shape, grabpos, railpos, sub_location, component_name = results[0]
             if len(results) != 1:
                 print("You can only move one component at a time. Operation aborted!")
@@ -658,6 +706,8 @@ def assembly_robot_command_loop(
             robot.grab_component(
                 railpos, grabpos[index], is_grab=False, component_name=component_name
             )
+        else:
+            print(f"Input {input_str} not recognized! Try again.")
 
 
 def main():
@@ -671,7 +721,7 @@ def main():
     image_path.mkdir(exist_ok=True)
     
     # Calibrate robot-to-pixel distances if needed
-    robot.calibrate_machine_vision() # TODO: test this function!
+    robot.calibrate_machine_vision(force=False) # force requires calibration to be rerun
 
     # Main loop
     assembly_robot_command_loop(robot, image_path=str(image_path))

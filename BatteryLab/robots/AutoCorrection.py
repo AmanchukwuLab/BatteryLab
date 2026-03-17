@@ -4,6 +4,7 @@ import time
 import os
 import threading
 import json
+from datetime import datetime
 
 from ..helper.Logger import Logger
 from .Constants import Components, AssemblySteps, AutoCorrectionConfig, StepCorrectionConfig
@@ -11,7 +12,7 @@ from .Constants import Components, AssemblySteps, AutoCorrectionConfig, StepCorr
 from pathlib import Path
 
 class AutoCorrection():
-
+    # Module for correcting component placement based on lookup camera images
     def __init__(self, logger: Logger):
         self.logger = logger
         
@@ -19,7 +20,10 @@ class AutoCorrection():
         self.correction_config = AutoCorrectionConfig()
         self.cam_port_bottom = self.correction_config.CAM_PORT_BOTM
         self.cam_port_top = self.correction_config.CAM_PORT_TOP
-        self.vision_params_path = "vision_params.json"
+        self.dir_name = Path(os.path.dirname(__file__)) / "Calibration"
+        if not self.dir_name.exists():
+            os.makedirs(self.dir_name)
+        self.vision_params_path = self.dir_name / "vision_params.json"
         self.vision_params = self.get_vision_params()
         pass
 
@@ -30,9 +34,7 @@ class AutoCorrection():
         img_gray = cv2.medianBlur(img_gray, 5)
         
         # Run detection algorithm
-        circles = cv2.HoughCircles(img_gray, cv2.HOUGH_GRADIENT, 1, object_config['minDist'],
-                                param1=object_config['param1'], param2=object_config['param2'],
-                                minRadius=object_config['minR'], maxRadius=object_config['maxR'])
+        circles = cv2.HoughCircles(img_gray, cv2.HOUGH_GRADIENT, 1, object_config['minDist'], param1=object_config['param1'], param2=object_config['param2'], minRadius=object_config['minR'], maxRadius=object_config['maxR'])
         h, w = img.shape[:2]
         found_circles = []
         if circles is not None:
@@ -49,10 +51,15 @@ class AutoCorrection():
         return found_circles
 
     def get_vision_params(self):
+        # Load previously stored calibration parameters
         try:
+            print(f"Checking in {self.vision_params_path} for vision_params.json...")
             with open(self.vision_params_path, mode='r') as f:
-                return json.load(f)
-        except:
+                result = json.load(f)
+                print("Previously computed vision_params found and loaded successfully.")
+                return result
+        except Exception as e:
+            print(f"Unable to find previously computed vision_params due to exception: {e}")
             return {}
 
     def write_vision_params(self):
@@ -62,18 +69,20 @@ class AutoCorrection():
         return None
    
     def compute_conversion(self, img_centered, img_adjusted, dx, dy):
-    # Machine vision parameters tuned using ~/Research/BatteryLab/tests/CircleAutoDetection.py
         img_width = min(img_centered.shape[:2])
+        # NOTE: these parameters can be tuned using the interactive script in BatteryLab/tests/HoughCircles
         object_config = {
-                'minDist': img_width//10, # We only want one circle, so set this large
-                'param1' : 250,           # Too high will miss edges, too low -> noisy edges
-                'param2' : 30,            # Higher is stricter (fewer circles)
-                'minR'   : img_width//10,
-                'maxR'   : img_width//5,
+                'minDist': img_width//3,  # We only want one circle, so set this large
+                'param1' : 300,           # Too high will miss edges, too low -> noisy edges
+                'param2' : 30,            # Higher is stricter (fewer circles, radius tends to be slightly inscribed the actual)
+                'minR'   : 45,
+                'maxR'   : 80,
                 }
         suction_config = object_config.copy()
-        suction_config['minR'] = img_width//20
-        suction_config['maxR'] = img_width//8
+        suction_config['param1'] = 95
+        suction_config['param2'] = 35
+        suction_config['minR'] = 30
+        suction_config['maxR'] = 50
 
         # Find circles in both images
         found_circles_center = self.detect_object_center(img_centered, suction_config)
@@ -81,7 +90,9 @@ class AutoCorrection():
         # Handle multiple circles found
         if len(found_circles_center) == 0:
             # If no circles found, save the image for later reference
-            cv2.imwrite("Suction_NoCircleDetected_center.png", img_centered)
+            cv2.imwrite(self.dir_name/"Suction_NoCircleDetected_center.png", img_centered)
+            print(f"Saving img_centered to {self.dir_name}...")
+            time.sleep(2)
             raise ValueError("No circles found during calibration!")
         elif type(found_circles_center[1]) != int:
             msg = "Multiple circles found during machine vision calibration in image of centered suction cup!"
@@ -89,7 +100,7 @@ class AutoCorrection():
             print(f"found_circles_center: {found_circles_center}")
             
             # Save image for later reference
-            cv2.imwrite("Suction_MultDetected_center.png", img_centered)
+            cv2.imwrite(self.dir_name/"Suction_MultDetected_center.png", img_centered)
 
             # Only keep the circle with the smaller radius
             radii = [row[1] for row in found_circles_center]
@@ -98,7 +109,7 @@ class AutoCorrection():
         found_circles_adjust = self.detect_object_center(img_adjusted, suction_config)
         if len(found_circles_adjust) == 0:
             # If no circles found, save the image for later reference
-            cv2.imwrite("Suction_NoCircleDetected_adjust.png", img_centered)
+            cv2.imwrite(self.dir_name/"Suction_NoCircleDetected_adjust.png", img_adjusted)
             raise ValueError("No circles found during calibration!")
         elif type(found_circles_adjust[1]) != int:
             msg = "Multiple circles found during machine vision calibration in image of adjusted suction cup!"
@@ -106,23 +117,77 @@ class AutoCorrection():
             print(f"found_circles_adjust: {found_circles_adjust}")
             
             # Save image for later reference
-            cv2.imwrite("Suction_MultDetected_adjust.png", img_centered)
+            cv2.imwrite(self.dir_name/"Suction_MultDetected_adjust.png", img_adjusted)
             
             # Only keep the circle with the smaller radius
             radii = [row[1] for row in found_circles_adjust]
             found_circles_adjust = found_circles_adjust[np.argmin(radii)]
 
+        # Save calibration images for future reference
+        center_drawn = self.draw_detection(img_centered, found_circles_center, text=str(found_circles_center))
+        adjust_drawn = self.draw_detection(img_adjusted, found_circles_adjust, text=str(found_circles_adjust))
+        print(f"Saving calibration images in {self.dir_name}")
+        cv2.imwrite(self.dir_name / "centered_calibration_image.png", center_drawn)
+        cv2.imwrite(self.dir_name / "adjusted_calibration_image.png", adjust_drawn)
+        cv2.imwrite(self.dir_name / "BLANK_centered_calibration.png", img_centered)
+
         # Compute robot-pixel conversion factor
         dx_image = found_circles_adjust[0][0] - found_circles_center[0][0]
         dy_image = found_circles_adjust[0][1] - found_circles_center[0][1]
-        x_convert = dx/dx_image # robot space per pixel space
-        y_convert = dy/dy_image # robot space per pixel space
+        x_convert = dx/dy_image # robot space per pixel space (x and y are flipped between the camera and the robot arm! This just depends on how the system was set up.)
+        y_convert = dy/dx_image # robot space per pixel space
 
         # Write conversion factors to machine vision params, then return to user
         self.vision_params['x_convert'] = x_convert
         self.vision_params['y_convert'] = y_convert
+        self.vision_params['suction_center'] = found_circles_center[0]
+        self.vision_params['date_calibrated'] = datetime.now().strftime("%b_%d_%Y")
+        self.vision_params['object_config'] = object_config
+        self.vision_params['suction_config'] = suction_config
         self.write_vision_params()
-        return x_convert, y_convert
+        return self.vision_params
+        
+    def get_offset_simple(self, img):
+        found_circles = self.detect_object_center(img, self.vision_params['object_config'])
+        
+        # DEBUGGING: save picture with and without circles drawn on
+        print("found_circles = ", found_circles) # DEBUGGING
+        try:
+            print(f"Saving image to {self.dir_name}...")
+            cv2.imwrite(self.dir_name / "get_offset_func_image_clean.png", img)
+            img_drawn = self.draw_detection(img, found_circles, text=str(found_circles))
+            cv2.imwrite(self.dir_name / "get_offset_func_image.png", img_drawn)
+        except:
+            print("Something went wrong. Proceeding (other error catching should catch the issue)...")
+
+        # Handle cases of none or multiple circles found
+        current = datetime.now().strftime("%b_%d_%Y_%I:%M")
+        
+        if len(found_circles) == 0:
+            # If no circles found, save the image for later reference
+            cv2.imwrite(self.dir_name / f"NoCircleDetected_offset_{current}.png", img)
+            raise ValueError("No circles found for computing offset!")
+
+        elif type(found_circles[1]) != int:
+            msg = "Multiple circles found while computing offset! Keeping the circle with smaller radius."
+            self.logger.info(msg)
+            print(f"found_circles: {found_circles}")
+            
+            # Save image for later reference
+            cv2.imwrite(self.dir_name / "MultDetected_offset_{current}.png", img)
+            
+            # Only keep the circle with the smaller radius
+            radii = [row[1] for row in found_circles]
+            found_circles = found_circles[np.argmin(radii)]
+
+        # Compute pixel difference between known center from calibration and the detected center for this component
+        dx_pixel = self.vision_params['suction_center'][0] - found_circles[0][0]
+        dy_pixel = self.vision_params['suction_center'][1] - found_circles[0][1]
+
+        # Convert to robot arm units
+        dy = dx_pixel*self.vision_params['y_convert']
+        dx = dy_pixel*self.vision_params['x_convert']
+        return dx, dy
 
     def project_to_3d(self, image_coordinates, H_mtx): 
         """
