@@ -290,7 +290,7 @@ def create_assembly_robot_constants_from_manual_positions(
     ]
 
     for component_name in components:
-        print(f"Dealing with component <{component_name}>")
+        print(f"Creating position constants for <{component_name}>")
         if component_name not in manual_positions:
             print(
                 f"The component <{component_name}> is not in the well positions YAML file"

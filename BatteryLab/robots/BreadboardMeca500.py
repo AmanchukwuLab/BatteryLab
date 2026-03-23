@@ -39,12 +39,21 @@ class BreadBoardMeca500(Meca500):
         self.robot.SetTrf(*self.crimperRobotConstants.TRF)
         self.robot.SetGripperForce(self.RobotConstants.GRIP_F)
         self.robot.SetGripperVel(self.RobotConstants.GRIP_VEL)
-
-    def pick_up_from_assembly_post(self):
-        self.setup_for_pick_up()
         self.move_home(tool=RobotTool.SUCTION)
+
+    def close_gripper(self):
+        self.robot.GripperClose()
+        self.robot.WaitGripperMoveCompletion(5)
+        self.robot.Delay(0.5)
+
+    def open_gripper(self):
         self.robot.GripperOpen()
         self.robot.WaitGripperMoveCompletion(5)
+        self.robot.Delay(0.5)
+
+    def move_to_pick_up_ready_pose(self):
+        self.setup_for_pick_up()
+        self.open_gripper()
         self.robot.MovePose(*self.crimperRobotConstants.PostReadyPose)
         self.robot.WaitIdle(30)
         self.robot.SetCartLinVel(self.RobotConstants.L_VEL)
@@ -52,13 +61,17 @@ class BreadBoardMeca500(Meca500):
         self.robot.Delay(0.5)
         self.robot.MoveLin(*self.crimperRobotConstants.GrabReadyPose)
         self.robot.Delay(0.5)
-        self.robot.GripperClose()
-        self.robot.WaitGripperMoveCompletion(5)
-        self.robot.Delay(0.5)
+
+    def return_from_pick_up(self):
         self.robot.MoveLin(*self.crimperRobotConstants.GrabbedUpPose)
         self.robot.Delay(0.5)
-        # Suction is used for 0 joints in Crimper Robot
+        # Suction is used to zero the Crimper Robot joints
         self.move_home(tool=RobotTool.SUCTION)
+
+    def pick_up_from_assembly_post(self):
+        self.move_to_pick_up_ready_pose()
+        self.close_gripper()
+        self.return_from_pick_up()
 
     def drop_to_crimper(self):
         self.robot.SetTrf(*self.crimperRobotConstants.TRF)
@@ -67,16 +80,13 @@ class BreadBoardMeca500(Meca500):
         self.robot.SetCartLinVel(self.RobotConstants.L_VEL)
         self.robot.MoveLin(*self.crimperRobotConstants.CrimperDropPose)
         self.robot.WaitIdle(30)
-        self.robot.GripperOpen()
-        self.robot.WaitGripperMoveCompletion(5)
-        self.robot.Delay(1)
+        self.open_gripper()
         self.robot.MoveLin(*self.crimperRobotConstants.CrimperReadyToOperatePose)
         self.robot.WaitIdle(20)
 
     def pick_up_from_crimper(self):
         self.robot.SetTrf(*self.crimperRobotConstants.TRF)
-        self.robot.GripperOpen()
-        self.robot.WaitGripperMoveCompletion(5)
+        self.open_gripper()
         self.robot.MovePose(*self.crimperRobotConstants.CrimperReadyToOperatePose)
         self.robot.WaitIdle(20)
         self.robot.SetCartLinVel(self.RobotConstants.L_VEL)
@@ -86,8 +96,7 @@ class BreadBoardMeca500(Meca500):
         self.robot.WaitIdle(20)
         self.robot.MoveLin(*self.crimperRobotConstants.CrimperPickPose)
         self.robot.WaitIdle(20)
-        self.robot.GripperClose()
-        self.robot.WaitGripperMoveCompletion(5)
+        self.close_gripper()
         self.robot.MoveLin(*self.crimperRobotConstants.CrimperPickedUpPose)
         self.robot.WaitIdle(10)
         self.robot.MoveLin(*self.crimperRobotConstants.CrimperReadyToOperatePose)
@@ -103,9 +112,7 @@ class BreadBoardMeca500(Meca500):
         grab_ready_pos[2] = 15 + grab_ready_pos[2]
         self.robot.MoveLin(*grab_ready_pos)
         self.robot.WaitIdle()
-        self.robot.GripperOpen()
-        self.robot.WaitGripperMoveCompletion()
-        self.robot.Delay(0.5)
+        self.open_gripper()
         self.move_home(tool=RobotTool.SUCTION)
 
     def put_to_storage(self):
@@ -115,9 +122,7 @@ class BreadBoardMeca500(Meca500):
         self.robot.SetCartLinVel(self.RobotConstants.L_VEL)
         self.robot.MoveLin(*self.crimperRobotConstants.StorageDropPose)
         self.robot.WaitIdle(20)
-        self.robot.GripperOpen()
-        self.robot.WaitGripperMoveCompletion(5)
-        self.robot.Delay(0.5)
+        self.open_gripper()
         self.move_home(tool=RobotTool.SUCTION)
 
     def move_for_photo_check(self):
@@ -133,6 +138,7 @@ class BreadBoardMeca500(Meca500):
         self.robot.MovePose(*self.crimperRobotConstants.PhotoCheckPreparePose)
         self.robot.WaitIdle(20)
         self.move_home(tool=RobotTool.SUCTION)
+
 
 def breadboard_meca500_example_app():
     robot_address = "192.168.0.101"

@@ -7,7 +7,9 @@ from BatteryLab.robots.Constants import (
     AssemblyRobotCameraConstants,
     Components,
     RobotTool,
+    AssemblySteps,  # add this import
 )
+
 from BatteryLab.helper.utils import (
     create_assembly_robot_constants_from_manual_positions,
     create_assembly_robot_camera_constants_from_manual_positions,
@@ -23,6 +25,7 @@ import rclpy
 import time
 import cv2
 from datetime import datetime
+from typing import Callable, Optional
 
 from ament_index_python.packages import get_package_share_path
 from camera_service.camera_client import ImageClient
@@ -42,6 +45,7 @@ class AssemblyRobot(Node):
         self.suction_pump_client = SuctionPumpClient()
         self.logger = self.get_logger() if logger is None else logger
         self.auto_correction = AutoCorrection(logger=self.logger)
+        self.D_LIMIT = 20.0  # Limit for dx and dy adjustments during vision calibration or machine vision-based correction.
         self.rail_meca500 = RailMeca500(
             logger=self.logger,
             robot_address=robot_address,
@@ -78,6 +82,11 @@ class AssemblyRobot(Node):
             / "yaml"
             / "assembly_counter.yml"
         )
+        # directory for lookup images used for Hough tuning
+        self.lookup_tuning_dir = Path(
+            "/home/yuanjian/Research/BatteryLab/images/lookup_tuning"
+        )
+        self.lookup_tuning_dir.mkdir(parents=True, exist_ok=True)
 
     def save_counter_config(self):
         with open(self.counter_file, "w") as f:
@@ -98,11 +107,46 @@ class AssemblyRobot(Node):
         else:
             print("You don't have an existing config, will start from scratch")
 
+    def load_position_files(self):
+        # First, create position constants based on manually taught positions from YAML files
+        position_file = (
+            Path(get_package_share_path("assembly_robot"))
+            / "yaml"
+            / "well_positions.yaml"
+        )
+        with open(position_file, "r") as f:
+            try:
+                constant_positions = yaml.safe_load(f)
+                print("Loaded constant_positions for assembly robot!")
+            except yaml.YAMLError as e:
+                print("Cannot load the well positions YAML file with error: ", e)
+
+        self.assemblyRobotConstants = (
+            create_assembly_robot_constants_from_manual_positions(constant_positions)
+        )
+
+        # Then, create the camera position constants with a similar method
+        camera_position_file = (
+            Path(get_package_share_path("assembly_robot"))
+            / "yaml"
+            / "arm_camera_positions.yaml"
+        )
+        with open(camera_position_file, "r") as f:
+            try:
+                camera_constant_positions = yaml.safe_load(f)
+            except yaml.YAMLError as e:
+                print("Cannot load the camera positions YAML file with error: ", e)
+        self.assemblyRobotCameraConstants = (
+            create_assembly_robot_camera_constants_from_manual_positions(
+                camera_manual_positions=camera_constant_positions
+            )
+        )
+
     def initialize_and_home_robots(self):
         self.load_position_files()
-        
+
         robot_pos = self.assemblyRobotConstants.LOOKUP_CAM_SK_PO
-        self.logger.info(f"CHECK: LOOKUP_CAM_SK_PO = {robot_pos}") 
+        self.logger.info(f"CHECK: LOOKUP_CAM_SK_PO = {robot_pos}")
         ok = self.rail_meca500.initializeRobot()
         if not ok:
             print("The Meca500 cannot be connected")
@@ -169,9 +213,9 @@ class AssemblyRobot(Node):
             available_locations[current_sublocation_index],
         )
 
-    def move_home_and_out_of_way(self):
+    def move_home_and_out_of_way(self, home: float = 30.0):
         self.rail_meca500.move_home(tool=RobotTool.SUCTION)
-        self.move_zaber_rail(40.0)
+        self.move_zaber_rail(home)
 
     def move_zaber_rail(self, rail_pos: float):
         self.logger.info(f"Assembly Robot Moving to {rail_pos}")
@@ -195,10 +239,52 @@ class AssemblyRobot(Node):
         # make sure the move is finished
         self.get_logger().debug(f"Assembly Robot move request finished")
 
-    def drop_current_component_to_assembly_post(self, order: int = 1):
-        # First, take a photo and use to compute needed adjustment
+    def drop_current_component_to_assembly_post(
+        self,
+        order: int = 1,
+        component: Components = Components.Spacer,
+        premove_callback: Optional[Callable[[], None]] = None,
+    ):
+        """
+        Drop the currently held component onto the assembly post, using vision-based correction.
+
+        component: which component type is on the suction head; its Hough parameters
+                   (from AutoCorrectionConfig) will be used when calling get_offset.
+        premove_callback: an optional function to call before the assembly robot moves away from
+            placing the component. Used to close the crimper robot's gripper on the separator.
+        """
+        # First, take a photo at lookup camera and compute needed adjustment.
         img = self.take_a_look_up_photo()
-        dx, dy = self.auto_correction.get_offset_simple(img)
+        dx = dy = 0.0
+        try:
+            img_out, correction, grabbed = self.auto_correction.get_offset(
+                img, component=component, state=AssemblySteps.Drop
+            )
+            if not grabbed:
+                self.get_logger().warning(
+                    f"Vision indicates {component.name} was not grabbed; "
+                    "proceeding without positional correction."
+                )
+            else:
+                if correction is None or len(correction) < 2:
+                    raise ValueError(
+                        f"Invalid correction vector from get_offset: {correction}"
+                    )
+                dx, dy = float(correction[0]), float(correction[1])
+        except Exception as e:
+            # Homography or detection failed; optional scalar fallback
+            self.get_logger().warning(
+                f"get_offset (homography-based) failed for {component.name} "
+                f"at Drop step ({e}); falling back to get_offset_simple."
+            )
+            try:
+                dx, dy = self.auto_correction.get_offset_simple(img)
+            except Exception as e2:
+                self.get_logger().error(
+                    f"get_offset_simple also failed ({e2}); "
+                    "continuing with zero correction."
+                )
+                dx = dy = 0.0
 
         # Proceed placing component
         self.rail_meca500.move_home()
@@ -214,41 +300,62 @@ class AssemblyRobot(Node):
         else:
             self.get_logger().error("The current tool is invalid for a snapshot")
             return
+
         self.move_zaber_rail(rail_pos)
         self.rail_meca500.robot.MoveJoints(*mid_point_joints)
         self.rail_meca500.robot.WaitIdle(30)
-        
-        # Adjst robot_pos (pedestal drop coords) based on vision info
-        print(f"Adjusting robot_pos ({robot_pos}) by dx = {dx} and dy = {dy}") # DEBUGGING
+
+        # Adjust robot_pos (pedestal drop coords) based on vision info
+        dx = max(-self.D_LIMIT, min(self.D_LIMIT, dx))
+        dy = max(-self.D_LIMIT, min(self.D_LIMIT, dy))
+        if abs(dx) == self.D_LIMIT:
+            self.get_logger().warning(
+                f"dx correction for {component.name} hit limit of {self.D_LIMIT}; "
+                "check vision system and calibration."
+            )
+        if abs(dy) == self.D_LIMIT:
+            self.get_logger().warning(
+                f"dy correction for {component.name} hit limit of {self.D_LIMIT}; "
+                "check vision system and calibration."
+            )
+        self.get_logger().info(
+            f"Applying vision correction for {component.name} drop: dx={dx:.4f}, dy={dy:.4f}"
+        )
         robot_pos[0] += dx
         robot_pos[1] += dy
-        self.rail_meca500.pick_place(robot_pos, is_grab=False)
+        self.rail_meca500.pick_place(
+            robot_pos, is_grab=False, premove_callback=premove_callback
+        )
 
-
-    def calibrate_machine_vision(self, force = False):
+    def calibrate_machine_vision(self, force=False):
         """Used to:
-                1) take a picture and find the center of the suction cup (in pixels)
-                2) calibrate pixels-to-robot units by taking a picture at (defaultx+dx, defaulty+dy), using HoughCircles to find the center of the suction cup (in pixels), then computing x_convert = (dx/(x_pixel_original-x_pixel_new)) and similarly for y_convert.
-                3) store these variables in a calibration file for later reference.
-        The calibration parameters may already exist. Setting the optional parameter 'force' to True will force the system to recalibrate.
+        1) take a picture and find the center of the suction cup (in pixels)
+        2) calibrate pixels-to-robot units by taking a picture at (defaultx+dx, defaulty+dy), using HoughCircles to find the center of the suction cup (in pixels), then computing x_convert and y_convert.
+        3) (extended) compute a pixel→robot homography from multiple offsets, so the more rigorous AutoCorrection code can be used.
         """
         print("Starting machine vision calibration routine...")
         # Check if calibration data already exists
         if not force:
             vision_params = self.auto_correction.get_vision_params()
-            available_params = list(vision_params.keys())
-            needed = ['x_convert', 'y_convert', 'suction_center']
-            
+            # Only scalar factors & suction_center are needed now
+            needed = ["x_convert", "y_convert", "suction_center"]
+
             ready = True
             for needed_param in needed:
-                if needed_param not in available_params:
-                    print(f"{needed_param} not found in calibration file. Must recalibrate.")
+                if needed_param not in vision_params:
+                    print(
+                        f"{needed_param} not found in calibration file. Must recalibrate."
+                    )
                     ready = False
+                    break
 
-            # TODO: automatically check vision_params['date_calibrated']. If it's been a long time, force the system to re-calibrate.
+            # Also require homography for Drop state
+            homography_ready = self.auto_correction.has_homography(AssemblySteps.Drop)
 
-            if ready == True:
-                print("All calibration parameters found, moving on...")
+            if ready and homography_ready:
+                print(
+                    "All calibration parameters (scalar + homography) found, moving on..."
+                )
                 self.vision_params = vision_params
                 return None
         else:
@@ -256,42 +363,119 @@ class AssemblyRobot(Node):
 
         # Specify suction tool
         self.rail_meca500.change_tool(RobotTool.SUCTION)
-        
-        # Take a picture of the empty suction cup
+
+        # Base pose: lookup camera position
+        base_pose = np.array(self.assemblyRobotConstants.LOOKUP_CAM_SK_PO, dtype=float)
+        base_x, base_y = base_pose[0], base_pose[1]
+
+        # Take a picture of the empty suction cup at base pose
         img_suction_center = self.take_a_look_up_photo(rehome=False)
 
-        # Take a picture with a slight adjustment
-        dx, dy = -15, -15 # Note: these are restricted to a max of 20 (trimmed in take_a_look_up_photo). 
+        # Single offset used for legacy scalar conversion
+        dx_single, dy_single = -15, -15  # Note: trimmed in take_a_look_up_photo
+        img_suction_adjust = self.take_a_look_up_photo(
+            dx=dx_single, dy=dy_single, rehome=False, midpoint=False
+        )
 
-        img_suction_adjust = self.take_a_look_up_photo(dx=dx, dy=dy, rehome=False, midpoint=False)
+        # Invert images for easier circle detection
+        img_suction_center_inv = cv2.bitwise_not(img_suction_center)
+        img_suction_adjust_inv = cv2.bitwise_not(img_suction_adjust)
 
-        # Circle finding algorithm finds suction easier with inverted images
-        img_suction_center = cv2.bitwise_not(img_suction_center)
-        img_suction_adjust = cv2.bitwise_not(img_suction_adjust)
-        
-        # Compute conversion factors
-        self.vision_params = self.auto_correction.compute_conversion(img_suction_center, img_suction_adjust, dx, dy)
+        # Compute scalar conversion factors + suction_center + configs
+        self.vision_params = self.auto_correction.compute_conversion(
+            img_suction_center_inv, img_suction_adjust_inv, dx_single, dy_single
+        )
+
+        # ---- NEW: multi-offset homography calibration ----
+        print("Computing homography from multiple dx,dy offsets around lookup pose...")
+
+        # Define offsets: four corners around (0,0) in robot X/Y
+        d = 15.0  # same scale as your single offset; tune if needed
+        offsets = [
+            (d, d),
+            (d, -d),
+            (-d, d),
+            (-d, -d),
+        ]
+
+        image_points = [self.vision_params["suction_center"]]
+        world_points = [(0, 0)]
+
+        # Build Hough config for detecting the suction cup during homography sampling
+        suction_cfg = self.auto_correction.correction_config.Suction_Cup
+        suction_hough = {
+            "minDist": suction_cfg.minDist,
+            "param1": suction_cfg.param1,
+            "param2": suction_cfg.param2,
+            "minR": suction_cfg.minR,
+            "maxR": suction_cfg.maxR,
+        }
+
+        # We are already at the correct rail position; just re-use rehome=False
+        for dx_i, dy_i in offsets:
+            img_i = self.take_a_look_up_photo(
+                dx=dx_i, dy=dy_i, rehome=False, midpoint=False
+            )
+            img_i_inv = cv2.bitwise_not(img_i)
+
+            found = self.auto_correction.detect_object_center(img_i_inv, suction_hough)
+            if not found:
+                self.get_logger().warn(
+                    f"Homography sample at (dx,dy)=({dx_i},{dy_i}) had no suction circle; skipping this sample."
+                )
+                continue
+
+            (u, v), _ = found  # found structure: [[u,v], r]
+            image_points.append((float(u), float(v)))
+
+            # We want the homography matrix to yield a robot coordinate offset, so the world points are simply the dx, dy offsets in robot units
+            world_points.append((dx_i, dy_i))
+
+        if len(image_points) >= 4:
+            # Allows for one of the four images to fail detection while still computing a homography
+            try:
+                self.auto_correction.compute_and_store_homography(
+                    image_points=image_points,
+                    world_points=world_points,
+                    state=AssemblySteps.Drop,  # use Drop state for lookup camera drop correction
+                )
+            except Exception as e:
+                self.get_logger().error(f"Failed to compute/store homography: {e}")
+        else:
+            self.get_logger().warn(
+                f"Not enough valid homography samples collected ({len(image_points)}). "
+                "AutoCorrection.get_offset will still fall back to existing behavior."
+            )
+
+        # Move the robot out of the way
         self.move_home_and_out_of_way()
         return None
 
     def take_a_look_up_photo(self, dx=0, dy=0, rehome=True, midpoint=True):
-        """Homes the rail_meca500's arm position, moves to the lookup camera, then takes and returns a photo. 
+        """Homes the rail_meca500's arm position, moves to the lookup camera, then takes and returns a photo.
 
         Optional inputs:
             dx: amount (in meca500 units) to adjust x position of lookup location
                 default = 0, limit = +-20
             dy: amount (in meca500 units) to adjust y position of lookup location
                 default = 0, limit = +-20
-            rehome: if set to False, robot arm will not return to arm position home before running this routine. This is used in the machine vision calibration step, in which a photo is taken, then a small xy adjustment is made and another photo taken. Returning to the arm's home position would be unnecessary. 
+            rehome: if set to False, robot arm will not return to arm position home before running this routine. This is used in the machine vision calibration step, in which a photo is taken, then a small xy adjustment is made and another photo taken. Returning to the arm's home position would be unnecessary.
             midpoint: if set to False, the robot arm will not move to the midpoint of its movement to the camera position. This is only used for the SECOND PHOTO of the calibrate_machine_vision routine, as moving back to the midpoint is unnecessary.
                 default = True
         """
         # Enforce limits for dx and dy
-        d_limit = 20
         if dx != 0:
-            dx = max(-d_limit, min(d_limit, dx))
+            dx = max(-self.D_LIMIT, min(self.D_LIMIT, dx))
         if dy != 0:
-            dy = max(-d_limit, min(d_limit, dy))
+            dy = max(-self.D_LIMIT, min(self.D_LIMIT, dy))
+        if abs(dx) == self.D_LIMIT:
+            self.get_logger().warning(
+                f"dx adjustment of {dx} hit limit of {self.D_LIMIT}; check vision system and calibration."
+            )
+        if abs(dy) == self.D_LIMIT:
+            self.get_logger().warning(
+                f"dy adjustment of {dy} hit limit of {self.D_LIMIT}; check vision system and calibration."
+            )
 
         # Home robot arm's position
         if rehome:
@@ -310,7 +494,7 @@ class AssemblyRobot(Node):
         else:
             self.get_logger().error("The current tool is invalid for a snapshot")
             return
-        
+
         # Adjust robot_pos for calibration routine
         if dx != 0:
             robot_pos[0] += dx
@@ -334,7 +518,7 @@ class AssemblyRobot(Node):
             rclpy.spin_until_future_complete(
                 self.look_up_camera_client, self.look_up_camera_client.future
             )
-            time.sleep(1)
+            time.sleep(0.5)
         # self.look_up_camera_client.display_image()
         image = self.look_up_camera_client.get_image()
         return image
@@ -398,38 +582,6 @@ class AssemblyRobot(Node):
         self.logger.debug(f"Assembly Robot will move for manual adjustment soon.")
         self.rail_meca500.move_to_pick_position(grab_position, level=level)
 
-    def load_position_files(self):
-        position_file = (
-            Path(get_package_share_path("assembly_robot"))
-            / "yaml"
-            / "well_positions.yaml"
-        )
-        with open(position_file, "r") as f:
-            try:
-                constant_positions = yaml.safe_load(f)
-                print("Loaded constant_positions for assembly robot!")
-            except yaml.YAMLError as e:
-                print("Cannot load the well positions YAML file with error: ", e)
-
-        self.assemblyRobotConstants = (
-            create_assembly_robot_constants_from_manual_positions(constant_positions)
-        )
-        camera_position_file = (
-            Path(get_package_share_path("assembly_robot"))
-            / "yaml"
-            / "arm_camera_positions.yaml"
-        )
-        with open(camera_position_file, "r") as f:
-            try:
-                camera_constant_positions = yaml.safe_load(f)
-            except yaml.YAMLError as e:
-                print("Cannot load the camera positions YAML file with error: ", e)
-        self.assemblyRobotCameraConstants = (
-            create_assembly_robot_camera_constants_from_manual_positions(
-                camera_manual_positions=camera_constant_positions
-            )
-        )
-
     def auto_grab_a_component_to_assembly_post(self, component_name: str):
         component = getattr(self.assemblyRobotConstants, component_name)
         available_locations = list(component.keys())
@@ -471,6 +623,107 @@ class AssemblyRobot(Node):
         # TODO: add autocorrection on top of grab_component
         pass
 
+    def capture_lookup_images_for_all_components(self):
+        """
+        Automatically grab one example of each component type, move to the lookup
+        camera, take a photo at the standard lookup position, and save it to a
+        common directory for HoughCircles tuning.
+        The component is then returned to its original well.
+        """
+        self.logger.info("Starting automatic lookup image capture for all components.")
+
+        # fixed order covering the seven unique components
+        component_sequence = [
+            Components.CathodeCase,
+            Components.Washer,
+            Components.Spacer,
+            Components.Cathode,
+            Components.Separator,
+            Components.Anode,
+            Components.AnodeCase,
+        ]
+
+        for comp in component_sequence:
+            name = comp.name
+            try:
+                # 1) get next available well for this component
+                (
+                    global_index,
+                    subtray_shape,
+                    well_grab_pos,
+                    rail_pos,
+                    subtray_name,
+                ) = self.get_next_well_of_component(name)
+            except Exception as e:
+                self.logger.error(f"Failed to get next well for {name}: {e}")
+                continue
+
+            self.logger.info(
+                f"[LookupCapture] Component={name}, global_index={global_index}, "
+                f"subtray={subtray_name}, rail_pos={rail_pos}"
+            )
+
+            # 2) grab the component from its tray
+            try:
+                self.grab_component(
+                    rail_position=rail_pos,
+                    grab_position=well_grab_pos,
+                    is_grab=True,
+                    component_name=name,
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to grab {name}: {e}")
+                continue
+
+            # 3) move to lookup camera and take a photo at standard location
+            try:
+                img = self.take_a_look_up_photo()
+            except Exception as e:
+                self.logger.error(f"Failed to take lookup photo for {name}: {e}")
+                # try to put component back before continuing
+                try:
+                    self.grab_component(
+                        rail_position=rail_pos,
+                        grab_position=well_grab_pos,
+                        is_grab=False,
+                        component_name=name,
+                    )
+                except Exception as e2:
+                    self.logger.error(
+                        f"Failed to return component {name} after camera error: {e2}"
+                    )
+                continue
+
+            # 4) save the image
+            timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+            filename = (
+                self.lookup_tuning_dir
+                / f"Lookup-{name}-idx{global_index}-{timestamp}.jpg"
+            )
+            try:
+                cv2.imwrite(str(filename), img)
+                self.logger.info(f"Saved lookup image for {name} to {filename}")
+            except Exception as e:
+                self.logger.error(f"Failed to save lookup image for {name}: {e}")
+
+            # 5) return component to the same well
+            try:
+                self.rail_meca500.move_home(tool=RobotTool.SUCTION)
+                self.grab_component(
+                    rail_position=rail_pos,
+                    grab_position=well_grab_pos,
+                    is_grab=False,
+                    component_name=name,
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"Failed to return component {name} to tray after capture: {e}"
+                )
+
+        # move system out of the way when done
+        self.move_home_and_out_of_way()
+        self.logger.info("Finished automatic lookup image capture for all components.")
+
 
 def get_component_location_from_user(robot, component_prompt):
     success = False
@@ -480,7 +733,7 @@ def get_component_location_from_user(robot, component_prompt):
             component = getattr(robot.assemblyRobotConstants, component_name)
             success = True
         except:
-            if component_name.lower() == 'exit' or component_name.lower() == 'e':
+            if component_name.lower() == "exit" or component_name.lower() == "e":
                 print("Cancelling operation...")
                 return None
             print(f"Component '{component_name}' not recognized. Try again!")
@@ -522,6 +775,7 @@ def get_component_location_from_user(robot, component_prompt):
         )
     return result
 
+
 def get_location_index_from_user(shape, sub_location):
     assert len(shape) == 2
     index = input(
@@ -538,9 +792,10 @@ def get_location_index_from_user(shape, sub_location):
             return -1
     return index
 
-def get_user_confirmation(confirm=''):
-    '''Checks if user input matches the parameter 'confirm' (default: 'Y'), case sensitive. If user presses return (input=None), the function will not error.'''
-    response = '8.53973422267' # Nonsense to avoid false positives
+
+def get_user_confirmation(confirm=""):
+    """Checks if user input matches the parameter 'confirm' (default: 'Y'), case sensitive. If user presses return (input=None), the function will not error."""
+    response = "8.53973422267"  # Nonsense to avoid false positives
 
     while response != confirm:
         if confirm == "":
@@ -548,6 +803,7 @@ def get_user_confirmation(confirm=''):
         else:
             response = input(f"Type {confirm} to confirm and move on.")
     return None
+
 
 def assembly_robot_command_loop(
     robot: AssemblyRobot,
@@ -561,6 +817,7 @@ def assembly_robot_command_loop(
 [L] to grab a component and move to the lookup camera for a picture.
 [Z] to move to a component well for manual adjustment.
 [0] to move the assembly robot out of the way
+[H] to auto-grab one of each component and save lookup photos for Hough tuning.
 :> """
 
     component_prompt = """Which type of component do you want to test? Choose from the following
@@ -634,7 +891,7 @@ def assembly_robot_command_loop(
                 print("The index you give is not valid for the robot to grab!")
                 continue
         elif input_str == "G":
-            # Grab a compoent or put it back
+            # Grab a component or put it back
             results = get_component_location_from_user(robot, component_prompt)
             if results == None:
                 continue
@@ -706,6 +963,9 @@ def assembly_robot_command_loop(
             robot.grab_component(
                 railpos, grabpos[index], is_grab=False, component_name=component_name
             )
+        elif input_str == "H":
+            # Automatically grab one of each component and capture lookup images
+            robot.capture_lookup_images_for_all_components()
         else:
             print(f"Input {input_str} not recognized! Try again.")
 
@@ -719,13 +979,15 @@ def main():
     robot.initialize_and_home_robots()
     image_path = Path("/home/yuanjian/Research/BatteryLab/images/")
     image_path.mkdir(exist_ok=True)
-    
+
     # Calibrate robot-to-pixel distances if needed
-    robot.calibrate_machine_vision(force=False) # force requires calibration to be rerun
+    robot.calibrate_machine_vision(
+        force=False
+    )  # force requires calibration to be rerun
 
     # Main loop
     assembly_robot_command_loop(robot, image_path=str(image_path))
-    
+
     # End program
     robot.destroy_node()
     rclpy.shutdown()

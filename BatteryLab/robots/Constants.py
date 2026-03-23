@@ -119,116 +119,174 @@ class AutoCorrectionConfig:
     def __init__(self):
         self.CAM_PORT_BOTM: int = 1
         self.CAM_PORT_TOP: int = 2
+        ######## Last manually tuned by JWP on 3/18/26
+        # Anode: pretty touchy due to uneven reflections. Small radius range helps
         self.Anode_Drop = StepCorrectionConfig(
             name="Anode_Drop",
             diam=15,
             ksize=5,
-            minDist=100,
-            param1=100,
-            param2=10,
-            minR=80,
-            maxR=85,
+            minDist=150,
+            param1=150,
+            param2=20,
+            minR=50,
+            maxR=60,
         )
         self.Anode_Grab = StepCorrectionConfig(
             name="Anode_Grab",
             diam=15,
             ksize=5,
-            minDist=300,
-            param1=120,
-            param2=15,
-            minR=115,
-            maxR=135,
+            minDist=150,
+            param1=150,
+            param2=20,
+            minR=50,
+            maxR=60,
         )
+        # Cathode: somewhat sensitive. A bit better than anode due to more even reflections
         self.Cathode_Drop = StepCorrectionConfig(
             name="Cathode_Drop",
             diam=14,
             ksize=5,
-            minDist=100,
-            param1=100,
-            param2=10,
-            minR=75,
-            maxR=80,
+            minDist=150,
+            param1=150,
+            param2=30,
+            minR=40,
+            maxR=50,
         )
         self.Cathode_Grab = StepCorrectionConfig(
             name="Cathode_Grab",
             diam=14,
             ksize=5,
-            minDist=300,
-            param1=120,
-            param2=15,
-            minR=115,
-            maxR=125,
+            minDist=150,
+            param1=150,
+            param2=30,
+            minR=40,
+            maxR=50,
         )
+        # Separator is finnicky due to smoother, sensitive reflection gradients. Might take more tuning.
         self.Separator_Drop = StepCorrectionConfig(
             name="Separator_Drop",
             diam=15.5,
             ksize=5,
-            minDist=100,
-            param1=120,
-            param2=15,
-            minR=85,
-            maxR=93,
+            minDist=150,
+            param1=130,
+            param2=40,
+            minR=60,
+            maxR=80,
         )
         self.Separator_Grab = StepCorrectionConfig(
             name="Separator_Grab",
             diam=15.5,
             ksize=5,
-            minDist=500,
-            param1=120,
-            param2=15,
-            minR=135,
-            maxR=145,
+            minDist=150,
+            param1=130,
+            param2=40,
+            minR=60,
+            maxR=80,
         )
-        self.Anode_Spacer_Grab = StepCorrectionConfig(
+        # Spacer is very stable (highly rigid, reflective)
+        # NOTE: Anode_Spacer and Cathode_Spacer are never called in the code (ex. assemblyrobot app.py calls
+        # Spacer and SpacerExtra) Anode_Spacer and Cathode_Spacer would be more specific names -- it might be
+        # better to use those names instead in the future.
+        self.Anode_Spacer_Drop = StepCorrectionConfig(
             name="Anode_Spacer",
             diam=15.5,
             ksize=5,
-            minDist=100,
-            param1=120,
-            param2=15,
-            minR=135,
-            maxR=140,
+            minDist=150,
+            param1=330,
+            param2=34,
+            minR=50,
+            maxR=70,
         )
-        self.Cathode_Spacer_Grab = StepCorrectionConfig(
+        self.Cathode_Spacer_Drop = StepCorrectionConfig(
             name="Cathode_Spacer",
             diam=15.5,
             ksize=5,
-            minDist=100,
-            param1=120,
-            param2=15,
-            minR=135,
-            maxR=140,
+            minDist=150,
+            param1=330,
+            param2=34,
+            minR=50,
+            maxR=70,
         )
-        self.Cathode_Case_Grab = StepCorrectionConfig(
+        # generic Spacer drop config used by Components.Spacer_Drop.
+        self.Spacer_Drop = StepCorrectionConfig(
+            name="Spacer_Drop",
+            diam=15.5,
+            ksize=5,
+            minDist=150,
+            param1=330,
+            param2=34,
+            minR=50,
+            maxR=70,
+        )
+        # Optional: SpacerExtra (uses same initial tuning as Spacer)
+        self.SpacerExtra_Drop = StepCorrectionConfig(
+            name="SpacerExtra_Drop",
+            diam=15.5,
+            ksize=5,
+            minDist=150,
+            param1=330,
+            param2=34,
+            minR=50,
+            maxR=70,
+        )
+        # Cathode case detection is very stable.
+        self.CathodeCase_Drop = StepCorrectionConfig(
             name="Cathode_Case",
             diam=19.3,
             ksize=5,
-            minDist=100,
-            param1=120,
-            param2=15,
-            minR=187,
-            maxR=195,
+            minDist=150,
+            param1=280,
+            param2=40,
+            minR=60,
+            maxR=90,
         )
+        # Anode case detection is very stable.
+        self.AnodeCase_Drop = StepCorrectionConfig(
+            name="Anode_Case",
+            diam=19.3,
+            ksize=5,
+            minDist=150,
+            param1=50,
+            param2=65,
+            minR=50,
+            maxR=80,
+        )
+        # Washer has a wide range to allow detection of both outer and inner circles.
+        # It might be better to tune it more finely for one or the other. Param1 and Param2
+        # are currently tuned for detecting the outer circle.
+        self.Washer_Drop = StepCorrectionConfig(
+            name="Washer",
+            diam=15.5,
+            ksize=5,
+            minDist=150,
+            param1=330,
+            param2=40,
+            minR=20,
+            maxR=80,
+        )
+        # Global default (legacy "object_config" replacement)
         self.Reference = StepCorrectionConfig(
-            name="Reference",
+            name="Default",
             diam=2,
             ksize=5,
-            minDist=100,
-            param1=120,
-            param2=20,
-            minR=8,
-            maxR=15,
+            minDist=150,
+            param1=300,
+            param2=30,
+            minR=45,
+            maxR=80,
         )
+        # Global default for detecting the suction cup (legacy "suction_config")
         self.Suction_Cup = StepCorrectionConfig(
             name="Suction_Cup",
             diam=4,
             ksize=5,
             minDist=500,
-            param1=120,
-            param2=20,
-            minR=50,
-            maxR=60,
+            param1=95,
+            param2=35,
+            minR=30,
+            maxR=50,
         )
+        # Extra placeholder
         self.Customize = StepCorrectionConfig(
             name="Customize",
             diam=2,
@@ -239,3 +297,11 @@ class AutoCorrectionConfig:
             minR=110,
             maxR=115,
         )
+        # Optional: quick sanity check – every component used during Drop should have a config
+        required_drop_names = [f"{c.name}_Drop" for c in Components]
+        missing = [name for name in required_drop_names if not hasattr(self, name)]
+        if missing:
+            # keep this non-fatal but visible
+            print(
+                f"[AutoCorrectionConfig] WARNING: missing Drop configs for: {missing}"
+            )

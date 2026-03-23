@@ -4,6 +4,7 @@ from .Constants import RobotTool
 from .Meca500 import Meca500
 
 from pathlib import Path
+from typing import Callable, Optional
 
 
 class RailMeca500(Meca500):
@@ -77,7 +78,54 @@ class RailMeca500(Meca500):
         else:
             self.logger.error("invalid tool for smart grab!")
 
-    def pick_place(self, grab_pos, is_grab=True):
+    def place(self, grab_pos):
+        # Helper function containing the logic for placing the component down and moving up to avoid stickiness
+        self.robot.MoveLin(
+            grab_pos[0],
+            grab_pos[1],
+            grab_pos[2] + 1.5,  # slightly higher to avoid stickiness
+            grab_pos[3],
+            grab_pos[4],
+            grab_pos[5],
+        )
+        self.robot.WaitIdle()
+        self.smart_drop()
+        self.robot.Delay(2)
+        self.robot.SetCartLinVel(self.RobotConstants.L_VEL + 250)
+        self.robot.MoveLin(
+            grab_pos[0],
+            grab_pos[1],
+            grab_pos[2] + 3,
+            grab_pos[3],
+            grab_pos[4],
+            grab_pos[5],
+        )
+        self.robot.WaitIdle()
+        self.robot.MoveLin(
+            grab_pos[0],
+            grab_pos[1],
+            grab_pos[2] + 1.5,
+            grab_pos[3],
+            grab_pos[4],
+            grab_pos[5],
+        )
+        self.robot.WaitIdle()
+        self.robot.MoveLin(
+            grab_pos[0],
+            grab_pos[1],
+            grab_pos[2] + 4,
+            grab_pos[3],
+            grab_pos[4],
+            grab_pos[5],
+        )
+        self.robot.WaitIdle()
+
+    def pick_place(
+        self,
+        grab_pos,
+        is_grab=True,
+        premove_callback: Optional[Callable[[], None]] = None,
+    ):
         self.logger.info(f"Starting picking component at {grab_pos}")
         self.robot.SetJointVel(self.RobotConstants.J_VEL)
         self.robot.MovePose(
@@ -97,45 +145,11 @@ class RailMeca500(Meca500):
             self.smart_grab()
             self.robot.Delay(1)
         else:
-            self.robot.MoveLin(
-                grab_pos[0],
-                grab_pos[1],
-                grab_pos[2] + 1.5,  # slightly higher to avoid stickiness
-                grab_pos[3],
-                grab_pos[4],
-                grab_pos[5],
-            )
-            self.robot.WaitIdle()
-            self.smart_drop()
-            self.robot.Delay(2)
-            self.robot.SetCartLinVel(self.RobotConstants.L_VEL + 250)
-            self.robot.MoveLin(
-                grab_pos[0],
-                grab_pos[1],
-                grab_pos[2] + 3,
-                grab_pos[3],
-                grab_pos[4],
-                grab_pos[5],
-            )
-            self.robot.WaitIdle()
-            self.robot.MoveLin(
-                grab_pos[0],
-                grab_pos[1],
-                grab_pos[2] + 1.5,
-                grab_pos[3],
-                grab_pos[4],
-                grab_pos[5],
-            )
-            self.robot.WaitIdle()
-            self.robot.MoveLin(
-                grab_pos[0],
-                grab_pos[1],
-                grab_pos[2] + 4,
-                grab_pos[3],
-                grab_pos[4],
-                grab_pos[5],
-            )
-            self.robot.WaitIdle()
+            self.place(grab_pos)
+            # In the case of the separator, close the gripper
+            if premove_callback is not None:
+                premove_callback()
+            
             self.robot.MoveLin(
                 grab_pos[0],
                 grab_pos[1],
@@ -146,6 +160,7 @@ class RailMeca500(Meca500):
             )
             self.robot.WaitIdle()
             self.robot.SetCartLinVel(self.RobotConstants.L_VEL)
+
         self.robot.MoveLin(
             grab_pos[0],
             grab_pos[1],
@@ -155,6 +170,7 @@ class RailMeca500(Meca500):
             grab_pos[5],
         )
         self.robot.Delay(0.5)
+
         # Move the component back to home
         self.robot.SetCartLinVel(self.RobotConstants.L_VEL)
         self.move_home(tool=self.tool)

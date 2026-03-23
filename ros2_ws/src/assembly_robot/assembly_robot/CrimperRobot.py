@@ -33,6 +33,16 @@ class CrimperRobot(Node):
     def exitRobot(self):
         self.crimper_robot.exitRobot()
 
+    def move_to_hold_separator(self):
+        self.crimper_robot.move_to_pick_up_ready_pose()
+
+    def close_gripper_to_hold_separator(self):
+        self.crimper_robot.close_gripper()
+
+    def release_separator(self):
+        self.crimper_robot.open_gripper()
+        self.crimper_robot.return_from_pick_up()
+
     def crimp_a_battery(self, use_camera_check: bool = False):
         self.crimper_robot.pick_up_from_assembly_post()
         if use_camera_check:
@@ -99,14 +109,15 @@ def crimper_robot_command_loop(robot: CrimperRobot):
         elif input_str == "S":
             robot.crimper_robot.move_home(RobotTool.SUCTION)
             robot.crimper_robot.put_to_storage()
+        elif input_str == "B":
+            robot.crimper_robot.move_home(RobotTool.SUCTION)
+            robot.drop_back_to_assembly_post()
+            robot.move_home()
         elif input_str == "G":
             robot.crimper_robot.move_home(RobotTool.SUCTION)
             robot.crimp_a_battery(False)
             robot.drop_back_to_assembly_post()
             robot.move_home()
-        elif input_str == "T":
-            is_picked = robot.check_battery_is_picked()
-            print(f"The battery is picked: {is_picked}")
         elif input_str == "A":
             use_camera = input(
                 "Do you want to use camera_check? (yes/no), default is yes:"
@@ -118,6 +129,9 @@ def crimper_robot_command_loop(robot: CrimperRobot):
 
             robot.put_to_storage()
             robot.move_home()
+        elif input_str == "T":
+            is_picked = robot.check_battery_is_picked()
+            print(f"The battery is picked: {is_picked}")
         else:
             print("The command you gave is not recognized!")
     robot.crimper_robot.move_home(tool=RobotTool.GRIPPER)

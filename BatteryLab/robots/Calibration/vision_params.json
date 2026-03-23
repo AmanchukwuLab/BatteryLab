@@ -1,1 +1,1 @@
-{"x_convert": 0.12931034482758622, "y_convert": -0.12931034482758622, "suction_center": [404, 276], "date_calibrated": "Mar_17_2026", "object_config": {"minDist": 160, "param1": 300, "param2": 30, "minR": 45, "maxR": 80}, "suction_config": {"minDist": 160, "param1": 95, "param2": 35, "minR": 30, "maxR": 50}}
+{"x_convert": 0.12931034482758622, "y_convert": -0.13157894736842105, "suction_center": [398, 256], "date_calibrated": "Mar_20_2026"}
