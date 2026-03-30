@@ -5,6 +5,7 @@ from BatteryLab.robots.Constants import AutoCorrectionConfig
 import cv2
 import sys
 import os
+from BatteryLab.robots.Constants import Components, AssemblySteps  # new import
 
 
 def clear_terminal():
@@ -97,6 +98,25 @@ def run_interactive_on_image(image_path: str):
     img_width = min(img.shape[:2])
     print(f"img_width={img_width}")
 
+    # --- try to infer component from filename and load Drop-step presets ---
+    img_name = os.path.basename(image_path)
+
+    def _infer_component(fname: str):
+        """
+        Best-effort parse of component from filename.
+        Expects names like 'Cathode_xxx.png', 'Anode123.jpg', etc.
+        Returns component_enum or None if not matched.
+        """
+        base = os.path.splitext(fname)[0].lower()
+        for c in Components:
+            if c.name.lower() in base:
+                return c
+        return None
+
+    component_enum = _infer_component(img_name)
+    step_enum = AssemblySteps.Drop  # always assume Drop step
+
+    # default config used when no specific preset is found
     object_config = {
         "minDist": img_width // 3,  # We only want one circle, so set this large
         "param1": 250,  # Too high will miss edges, too low -> noisy edges
@@ -105,7 +125,30 @@ def run_interactive_on_image(image_path: str):
         "maxR": 95,
     }
 
-    img_name = os.path.basename(image_path)
+    # if component can be inferred, try to use AutoCorrectionConfig preset for Drop
+    if component_enum:
+        attr_name = f"{component_enum.name}_{step_enum.name}"
+        if hasattr(configs, attr_name):
+            preset = getattr(configs, attr_name)
+            object_config = {
+                "minDist": preset.minDist,
+                "param1": preset.param1,
+                "param2": preset.param2,
+                "minR": preset.minR,
+                "maxR": preset.maxR,
+            }
+            print(
+                f"Using preset '{attr_name}' from AutoCorrectionConfig for {img_name}: "
+                f"{object_config}"
+            )
+        else:
+            print(
+                f"No preset '{attr_name}' in AutoCorrectionConfig; using generic defaults."
+            )
+    else:
+        print("Could not infer component from filename; using generic defaults.")
+
+    # preserve existing special handling for suction images
     if "suction" in img_name:
         img = cv2.bitwise_not(img)  # invert image to more easily detect suction cup
         object_config["param2"] = 40
@@ -231,6 +274,11 @@ def main():
         print("No image or directory provided by user. Exiting.")
         return
 
+    # Normalize the argument to an absolute path when possible
+    arg_path = os.path.expanduser(arg_path)
+    if not os.path.isabs(arg_path):
+        arg_path = os.path.abspath(arg_path)
+
     # If given a directory, process all images in it
     if os.path.isdir(arg_path):
         dir_path = arg_path
@@ -263,8 +311,14 @@ def main():
         image_path = arg_path
     else:
         # fall back to original behavior: treat as name in img_folder_path
-        image_path = os.path.join(img_folder_path, arg_path)
+        image_path = os.path.join(img_folder_path, sys.argv[1])
+        image_path = os.path.abspath(image_path)
 
+    if not os.path.isfile(image_path):
+        print(f"Image file not found: {image_path}")
+        return
+
+    print(f"Using image file: {image_path}")
     run_interactive_on_image(image_path)
     print("Test complete")
 

@@ -244,6 +244,7 @@ class AssemblyRobot(Node):
         order: int = 1,
         component: Components = Components.Spacer,
         premove_callback: Optional[Callable[[], None]] = None,
+        separator_dx_dy_max = 5.0
     ):
         """
         Drop the currently held component onto the assembly post, using vision-based correction.
@@ -252,6 +253,7 @@ class AssemblyRobot(Node):
                    (from AutoCorrectionConfig) will be used when calling get_offset.
         premove_callback: an optional function to call before the assembly robot moves away from
             placing the component. Used to close the crimper robot's gripper on the separator.
+        separator_dx_dy_max: a more strict limit for the separator component to avoid collision with the crimper robot
         """
         # First, take a photo at lookup camera and compute needed adjustment.
         img = self.take_a_look_up_photo()
@@ -285,6 +287,15 @@ class AssemblyRobot(Node):
                     "continuing with zero correction."
                 )
                 dx = dy = 0.0
+
+        # Apply stricter limits for the separator to avoid collision with the crimper robot
+        if component == Components.Separator:
+            if abs(dx) > separator_dx_dy_max or abs(dy) > separator_dx_dy_max:
+                self.get_logger().warning(
+                    f"Vision correction for Separator hit stricter limit ({separator_dx_dy_max}). Correcting to this maximum." 
+                )
+                dx = max(-separator_dx_dy_max, min(separator_dx_dy_max, dx))
+                dy = max(-separator_dx_dy_max, min(separator_dx_dy_max, dy))
 
         # Proceed placing component
         self.rail_meca500.move_home()
@@ -745,7 +756,7 @@ def get_component_location_from_user(robot, component_prompt):
         exit()
     sub_location = input(
         f"Which corner do you want to test (all, {available_locations}): "
-    )
+    ).lower()
     result = []
     if sub_location == "all":
         for sub_location in available_locations:

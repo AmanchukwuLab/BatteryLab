@@ -92,7 +92,7 @@ class AutoBatteryLab(Node):
         self.put_a_component_on_assembly_post(Components.Separator, order)
         order += 1
         # 6. Add the electrolyte - (1) Move assembly robot out of the way
-        self.assembly_robot.move_home_and_out_of_way(home=5.0)
+        self.assembly_robot.move_home_and_out_of_way(home=8.0)
         rail_pos = self.assembly_robot.get_rail_pos()
         if rail_pos == -1 or rail_pos > 10:
             self.get_logger().error(
@@ -147,6 +147,8 @@ def command_loop(batterylab: AutoBatteryLab):
     batterylab.assembly_robot.load_counter_config()
     while True:
         user_input = input(prompt).strip().lower()
+        if len(user_input) > 1:
+            user_input = user_input[0]
         if user_input == "":
             break
         elif user_input == "a":
