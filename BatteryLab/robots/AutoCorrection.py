@@ -279,9 +279,9 @@ class AutoCorrection:
                 return img, np.zeros(6, dtype=np.float32), False
             else:
                 self.logger.info(
-                    f"Object {component.name} failed being detected; assuming grabbed."
+                    f"Object {component.name} failed being detected."
                 )
-                return img, np.zeros(6, dtype=np.float32), True
+                return img, np.zeros(6, dtype=np.float32), False
 
     def project_to_3d(self, image_coordinates, H_mtx):
         """

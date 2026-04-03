@@ -125,6 +125,7 @@ class RailMeca500(Meca500):
         grab_pos,
         is_grab=True,
         premove_callback: Optional[Callable[[], None]] = None,
+        home_after: bool = True,
     ):
         self.logger.info(f"Starting picking component at {grab_pos}")
         self.robot.SetJointVel(self.RobotConstants.J_VEL)
@@ -171,10 +172,11 @@ class RailMeca500(Meca500):
         )
         self.robot.Delay(0.5)
 
-        # Move the component back to home
-        self.robot.SetCartLinVel(self.RobotConstants.L_VEL)
-        self.move_home(tool=self.tool)
-        self.robot.WaitIdle()
+        # Move the component back to home if requested
+        if home_after:
+            self.robot.SetCartLinVel(self.RobotConstants.L_VEL)
+            self.move_home(tool=self.tool)
+            self.robot.WaitIdle()
 
     def move_to_pick_position(self, grab_pos, level: float = 1):
         if level > 1 or level < 0:

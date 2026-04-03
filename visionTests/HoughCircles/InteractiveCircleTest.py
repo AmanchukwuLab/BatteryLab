@@ -274,11 +274,6 @@ def main():
         print("No image or directory provided by user. Exiting.")
         return
 
-    # Normalize the argument to an absolute path when possible
-    arg_path = os.path.expanduser(arg_path)
-    if not os.path.isabs(arg_path):
-        arg_path = os.path.abspath(arg_path)
-
     # If given a directory, process all images in it
     if os.path.isdir(arg_path):
         dir_path = arg_path
@@ -311,14 +306,8 @@ def main():
         image_path = arg_path
     else:
         # fall back to original behavior: treat as name in img_folder_path
-        image_path = os.path.join(img_folder_path, sys.argv[1])
-        image_path = os.path.abspath(image_path)
+        image_path = os.path.join(img_folder_path, arg_path)
 
-    if not os.path.isfile(image_path):
-        print(f"Image file not found: {image_path}")
-        return
-
-    print(f"Using image file: {image_path}")
     run_interactive_on_image(image_path)
     print("Test complete")
 

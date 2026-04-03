@@ -24,6 +24,9 @@ from rclpy.node import Node
 import rclpy
 import time
 import cv2
+import sys
+import termios
+import tty
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -45,7 +48,7 @@ class AssemblyRobot(Node):
         self.suction_pump_client = SuctionPumpClient()
         self.logger = self.get_logger() if logger is None else logger
         self.auto_correction = AutoCorrection(logger=self.logger)
-        self.D_LIMIT = 20.0  # Limit for dx and dy adjustments during vision calibration or machine vision-based correction.
+        self.D_LIMIT = 10.1  # Limit for dx and dy adjustments during vision calibration or machine vision-based correction.
         self.rail_meca500 = RailMeca500(
             logger=self.logger,
             robot_address=robot_address,
@@ -258,13 +261,16 @@ class AssemblyRobot(Node):
         # First, take a photo at lookup camera and compute needed adjustment.
         img = self.take_a_look_up_photo()
         dx = dy = 0.0
+        component_detected = False
+        lookup_image = img
         try:
-            img_out, correction, grabbed = self.auto_correction.get_offset(
+            img_out, correction, component_detected = self.auto_correction.get_offset(
                 img, component=component, state=AssemblySteps.Drop
             )
-            if not grabbed:
+            lookup_image = img_out
+            if not component_detected:
                 self.get_logger().warning(
-                    f"Vision indicates {component.name} was not grabbed; "
+                    f"Vision did not identify {component.name}; "
                     "proceeding without positional correction."
                 )
             else:
@@ -287,6 +293,8 @@ class AssemblyRobot(Node):
                     "continuing with zero correction."
                 )
                 dx = dy = 0.0
+            component_detected = False
+            lookup_image = img
 
         # Apply stricter limits for the separator to avoid collision with the crimper robot
         if component == Components.Separator:
@@ -337,6 +345,12 @@ class AssemblyRobot(Node):
         self.rail_meca500.pick_place(
             robot_pos, is_grab=False, premove_callback=premove_callback
         )
+        return {
+            "dx": dx,
+            "dy": dy,
+            "component_detected": component_detected,
+            "lookup_image": lookup_image,
+        }
 
     def calibrate_machine_vision(self, force=False):
         """Used to:
@@ -383,7 +397,7 @@ class AssemblyRobot(Node):
         img_suction_center = self.take_a_look_up_photo(rehome=False)
 
         # Single offset used for legacy scalar conversion
-        dx_single, dy_single = -15, -15  # Note: trimmed in take_a_look_up_photo
+        dx_single, dy_single = -10, -10  # Note: trimmed in take_a_look_up_photo
         img_suction_adjust = self.take_a_look_up_photo(
             dx=dx_single, dy=dy_single, rehome=False, midpoint=False
         )
@@ -401,7 +415,7 @@ class AssemblyRobot(Node):
         print("Computing homography from multiple dx,dy offsets around lookup pose...")
 
         # Define offsets: four corners around (0,0) in robot X/Y
-        d = 15.0  # same scale as your single offset; tune if needed
+        d = np.abs(dx_single)
         offsets = [
             (d, d),
             (d, -d),
@@ -557,7 +571,14 @@ class AssemblyRobot(Node):
         return self.arm_camera_client.get_image()
 
     def grab_component(
-        self, rail_position, grab_position, is_grab=True, component_name="suction"
+        self,
+        rail_position,
+        grab_position,
+        is_grab=True,
+        component_name="suction",
+        home_before: bool = True,
+        home_after: bool = True,
+        move_rail: bool = True,
     ):
         """Grab a component for battery or return it to the tray.
         This requires a cooperation between the rail and the Meca500 robotic arm on top of it.
@@ -565,16 +586,22 @@ class AssemblyRobot(Node):
         # Move home based on the tooling
         if component_name == "Washer":
             self.rail_meca500.change_tool(tool_name=RobotTool.GRIPPER)
-            self.rail_meca500.move_home()
         else:
             self.rail_meca500.change_tool(tool_name=RobotTool.SUCTION)
+
+        if home_before:
             self.rail_meca500.move_home()
 
         # Move the Zaber Rail
-        self.move_zaber_rail(rail_position)
+        if move_rail:
+            self.move_zaber_rail(rail_position)
         self.logger.debug(f"Assembly Robot will start picking soon.")
         # Let Meca500 pick up the component and move it home
-        self.rail_meca500.pick_place(grab_position, is_grab=is_grab)
+        self.rail_meca500.pick_place(
+            grab_position,
+            is_grab=is_grab,
+            home_after=home_after,
+        )
 
     def manual_adjustment(
         self, rail_position, grab_position, level: float = 1, component_name="suction"
@@ -592,6 +619,341 @@ class AssemblyRobot(Node):
         self.move_zaber_rail(rail_position)
         self.logger.debug(f"Assembly Robot will move for manual adjustment soon.")
         self.rail_meca500.move_to_pick_position(grab_position, level=level)
+
+    def _manual_mode_offset_limits(self, use_pick_position: bool):
+        """Return conservative per-axis jog limits for manual positioning."""
+        if use_pick_position:
+            return np.array([20.0, 20.0, 8.0, 0.0, 0.0, 0.0], dtype=float)
+        return np.array([20.0, 20.0, 20.0, 0.0, 0.0, 0.0], dtype=float)
+
+    def _clamp_pose_to_limits(
+        self,
+        pose,
+        base_pose,
+        offset_limits,
+        z_lower_limit: Optional[float] = None,
+    ):
+        """Clamp a pose to a small envelope around the selected manual base pose."""
+        candidate = np.array(pose, dtype=float)
+        base = np.array(base_pose, dtype=float)
+        lower = base - offset_limits
+        upper = base + offset_limits
+        if z_lower_limit is not None:
+            lower[2] = max(lower[2], float(z_lower_limit))
+        clamped = np.minimum(np.maximum(candidate, lower), upper)
+        if not np.allclose(clamped, candidate):
+            self.logger.warning(
+                "Manual jog target exceeded soft limits and was clamped to a safer pose."
+            )
+        return clamped.tolist()
+
+    def _move_to_manual_base_pose(
+        self,
+        rail_position,
+        base_position,
+        component_name: str,
+        use_pick_position: bool,
+        level: float,
+        tool_name: Optional[RobotTool] = None,
+        initial_z_offset: float = 0.0,
+        skip_prep: bool = False,
+    ):
+        """Move into the manual base pose using the safer approach pattern already used elsewhere."""
+        if use_pick_position:
+            if skip_prep:
+                # In batch reteach mode we are already on the correct rail/tool; avoid
+                # homing to keep iteration fast and collision-safe.
+                # Use a safe above-tray approach, then lower to the working pose.
+                approach_pose = list(base_position)
+                approach_pose[2] = base_position[2] + 30
+                self.rail_meca500.robot.MovePose(*approach_pose)
+                self.rail_meca500.robot.WaitIdle(10)
+                base_pose = list(base_position)
+                if level > 0:
+                    base_pose[2] = base_position[2] + 30 * level
+                self.rail_meca500.robot.MoveLin(*base_pose)
+                self.rail_meca500.robot.WaitIdle(10)
+                return base_pose
+            self.manual_adjustment(
+                rail_position, base_position, level=level, component_name=component_name
+            )
+            base_pose = list(base_position)
+            base_pose[2] = base_position[2] + 30 * level
+            return base_pose
+
+        # If moving to the lookup camera or pedestal, use the midpoint move
+        if tool_name == RobotTool.GRIPPER:
+            self.rail_meca500.change_tool(tool_name=RobotTool.GRIPPER)
+            self.rail_meca500.move_home()
+            midpoint_joints = [-90, 0, 0, 0, 0, 0]
+        else:
+            self.rail_meca500.change_tool(tool_name=RobotTool.SUCTION)
+            self.rail_meca500.move_home()
+            midpoint_joints = [-90, 0, 0, 0, 45, 0]
+
+        self.move_zaber_rail(rail_position)
+        self.rail_meca500.robot.MoveJoints(*midpoint_joints)
+        self.rail_meca500.robot.WaitIdle(10)
+        approach_pose = list(base_position)
+        if initial_z_offset != 0.0:
+            approach_pose[2] += initial_z_offset
+        self.rail_meca500.robot.MovePose(*approach_pose)
+        self.rail_meca500.robot.WaitIdle(10)
+        return approach_pose
+
+    def manual_arm_control_mode(
+        self,
+        rail_position,
+        base_position,
+        level: float = 0.0,
+        component_name: str = "suction",
+        step_size: float = 1.0,
+        use_pick_position: bool = True,
+        z_lower_limit: Optional[float] = None,
+        tool_name: Optional[RobotTool] = None,
+        initial_z_offset: float = 0.0,
+        skip_prep: bool = False,
+    ):
+        """Enter keyboard-based manual arm control for fine-tuning a single pose."""
+        # Move to the user-selected base pose
+        current_pose = self._move_to_manual_base_pose(
+            rail_position=rail_position,
+            base_position=base_position,
+            component_name=component_name,
+            use_pick_position=use_pick_position,
+            level=level,
+            tool_name=tool_name,
+            initial_z_offset=initial_z_offset,
+            skip_prep=skip_prep,
+        )
+        base_pose = list(current_pose)
+        offset_limits = self._manual_mode_offset_limits(use_pick_position)
+
+        # Set step size limits
+        min_step = 0.01
+        max_step = 5.0
+        step_size = max(min_step, min(max_step, step_size))
+        helper_text = (
+            "Manual arm control mode started. Keys: Up(-x), Down(+x), Right(+y), Left(-y), "
+            "u(+z), d(-z), p(print), o(return to base), h(help), space(pause), r(resume), +(bigger step), "
+            "-(smaller step), i(set step), v(toggle suction), q(quit)."
+        )
+        self.logger.info(
+            helper_text
+        )
+
+        # Allow manual operation of the robot around a set area of the base pose
+        motion_paused = False
+        suction_on = False
+        while True:
+            key = read_keypress()
+            if key in ("q", "Q"):
+                if motion_paused:
+                    decision = (
+                        input(
+                            "Motion is paused. Type 'keep' to keep paused and quit, or 'resume' to resume then quit (default keep): "
+                        )
+                        .strip()
+                        .lower()
+                    )
+                    if decision == "resume":
+                        try:
+                            self.rail_meca500.robot.ResumeMotion()
+                            self.rail_meca500.robot.WaitMotionResumed(5)
+                            motion_paused = False
+                            print("Motion resumed; exiting manual mode.")
+                        except Exception as e:
+                            self.logger.error(
+                                f"Unable to resume robot motion safely before quit: {e}"
+                            )
+                            print("Keeping paused state and exiting manual mode.")
+                    else:
+                        print("Keeping paused state and exiting manual mode.")
+                self.logger.info("Exiting manual arm control mode.")
+                break
+            elif key == " ":
+                try:
+                    self.rail_meca500.robot.PauseMotion()
+                    self.rail_meca500.robot.WaitMotionPaused(5)
+                    motion_paused = True
+                    print("Motion paused. Press r to resume or q to quit.")
+                except Exception as e:
+                    self.logger.error(f"Unable to pause robot motion safely: {e}")
+                continue
+            elif key in ("r", "R"):
+                if motion_paused:
+                    try:
+                        self.rail_meca500.robot.ResumeMotion()
+                        self.rail_meca500.robot.WaitMotionResumed(5)
+                        motion_paused = False
+                        print("Motion resumed.")
+                    except Exception as e:
+                        self.logger.error(f"Unable to resume robot motion safely: {e}")
+                else:
+                    print("Motion is not paused.")
+                continue
+            elif motion_paused:
+                print("Motion is paused. Press r to resume or q to quit.")
+                continue
+            elif key == "UP":
+                current_pose[0] -= step_size
+            elif key == "DOWN":
+                current_pose[0] += step_size
+            elif key == "RIGHT":
+                current_pose[1] += step_size
+            elif key == "LEFT":
+                current_pose[1] -= step_size
+            elif key in ("u", "U"):
+                current_pose[2] += step_size
+            elif key in ("d", "D"):
+                current_pose[2] -= step_size
+            elif key in ("p", "P"):
+                print(
+                    f"Current arm coordinates: x={current_pose[0]:.4f}, y={current_pose[1]:.4f}, z={current_pose[2]:.4f}, "
+                    f"alpha={current_pose[3]:.4f}, beta={current_pose[4]:.4f}, gamma={current_pose[5]:.4f}, step={step_size:.4f}"
+                )
+                continue
+            elif key in ("o", "O"):
+                current_pose = list(base_pose)
+                print("Returning to original/base manual position.")
+            elif key in ("h", "H"):
+                self.logger.info(
+                    helper_text
+                )
+                continue
+            elif key in ("+", "="):
+                step_size = min(max_step, step_size * 2.0)
+                print(f"Step size increased to {step_size:.4f}")
+                continue
+            elif key in ("-", "_"):
+                step_size = max(min_step, step_size / 2.0)
+                print(f"Step size decreased to {step_size:.4f}")
+                continue
+            elif key in ("i", "I"):
+                new_step = input(
+                    f"Enter new step size in [{min_step}, {max_step}] (current {step_size:.4f}): "
+                ).strip()
+                try:
+                    value = float(new_step)
+                    if value < min_step or value > max_step:
+                        print(
+                            f"Invalid step size {value}. Keep current step {step_size:.4f}."
+                        )
+                    else:
+                        step_size = value
+                        print(f"Step size set to {step_size:.4f}")
+                except ValueError:
+                    print(
+                        f"Cannot parse '{new_step}'. Keep current step {step_size:.4f}."
+                    )
+                continue
+            elif key in ("v", "V"):
+                if self.rail_meca500.get_current_tool() != RobotTool.SUCTION:
+                    print("Suction toggle is only available while using the suction tool.")
+                    continue
+                try:
+                    if suction_on:
+                        self.rail_meca500.suction_pump.drop()
+                        suction_on = False
+                        print("Suction OFF")
+                    else:
+                        self.rail_meca500.suction_pump.continues_pick()
+                        suction_on = True
+                        print("Suction ON")
+                except Exception as e:
+                    self.logger.error(f"Failed to toggle suction: {e}")
+                continue
+            else:
+                continue
+
+            current_pose = self._clamp_pose_to_limits(
+                current_pose,
+                base_pose,
+                offset_limits,
+                z_lower_limit=z_lower_limit,
+            )
+            self.rail_meca500.robot.MoveLin(*current_pose)
+            self.rail_meca500.robot.WaitIdle(10)
+
+        if suction_on:
+            try:
+                self.rail_meca500.suction_pump.drop()
+            except Exception as e:
+                self.logger.error(f"Failed to turn suction off while exiting manual mode: {e}")
+        return current_pose
+
+    def _get_corner_name_for_well_index(self, shape, well_index: int):
+        """Map a row-major well index to one of the four YAML corner keys."""
+        if len(shape) != 2:
+            return None
+        m, n = int(shape[0]), int(shape[1])
+        corner_map = {
+            0: "top_left",
+            n - 1: "bottom_left",
+            (m - 1) * n: "top_right",
+            m * n - 1: "bottom_right",
+        }
+        return corner_map.get(int(well_index))
+
+    def _apply_single_well_pose_in_memory(
+        self,
+        component_name: str,
+        sub_location: str,
+        well_index: int,
+        adjusted_pose,
+    ):
+        component = getattr(self.assemblyRobotConstants, component_name)
+        if sub_location not in component:
+            raise KeyError(
+                f"Sublocation '{sub_location}' not found under component '{component_name}'."
+            )
+        subtray = component[sub_location]
+        if not (0 <= well_index < len(subtray.grabPo)):
+            raise IndexError(
+                f"Well index {well_index} out of range for {component_name}/{sub_location}."
+            )
+        subtray.grabPo[well_index] = list(adjusted_pose)
+
+    def _persist_single_corner_pose_to_yaml(
+        self,
+        component_name: str,
+        sub_location: str,
+        shape,
+        well_index: int,
+        adjusted_pose,
+    ):
+        """Persist a single corner pose by directly replacing the matching YAML corner."""
+        corner_name = self._get_corner_name_for_well_index(shape, well_index)
+        if corner_name is None:
+            raise ValueError(
+                "Only corner wells can be persisted directly to YAML corners. "
+                "Use corner test mode or pick one of the four corner indices."
+            )
+        position_file = (
+            Path(get_package_share_path("assembly_robot"))
+            / "yaml"
+            / "well_positions.yaml"
+        )
+        with open(position_file, "r") as f:
+            manual_positions = yaml.safe_load(f)
+
+        if component_name not in manual_positions:
+            raise KeyError(f"Component '{component_name}' not found in {position_file}")
+        if sub_location not in manual_positions[component_name]:
+            raise KeyError(
+                f"Sublocation '{sub_location}' not found for component '{component_name}' in {position_file}"
+            )
+
+        subtray = manual_positions[component_name][sub_location]
+        if corner_name not in subtray:
+            raise KeyError(
+                f"Corner '{corner_name}' not found for {component_name}/{sub_location} in {position_file}"
+            )
+
+        subtray[corner_name]["cartesian"] = [float(v) for v in adjusted_pose]
+
+        with open(position_file, "w") as f:
+            yaml.safe_dump(manual_positions, f, sort_keys=False)
 
     def auto_grab_a_component_to_assembly_post(self, component_name: str):
         component = getattr(self.assemblyRobotConstants, component_name)
@@ -736,27 +1098,47 @@ class AssemblyRobot(Node):
         self.logger.info("Finished automatic lookup image capture for all components.")
 
 
-def get_component_location_from_user(robot, component_prompt):
-    success = False
-    while not success:
-        component_name = input(component_prompt)
-        try:
-            component = getattr(robot.assemblyRobotConstants, component_name)
-            success = True
-        except:
-            if component_name.lower() == "exit" or component_name.lower() == "e":
-                print("Cancelling operation...")
-                return None
-            print(f"Component '{component_name}' not recognized. Try again!")
+def get_component_location_from_user(
+    robot,
+    component_prompt,
+    selected_component_name: Optional[str] = None,
+    allow_all: bool = True,
+):
+    if selected_component_name is None:
+        success = False
+        while not success:
+            component_name = input(component_prompt)
+            try:
+                component = getattr(robot.assemblyRobotConstants, component_name)
+                success = True
+            except:
+                if component_name.lower() == "exit" or component_name.lower() == "e":
+                    print("Cancelling operation...")
+                    return None
+                print(f"Component '{component_name}' not recognized. Try again!")
+    else:
+        component_name = selected_component_name
+        component = getattr(robot.assemblyRobotConstants, component_name, None)
+        if component is None:
+            print(f"Component '{component_name}' not recognized. Operation aborted.")
+            return None
+
     available_locations = list(component.keys())
     if len(available_locations) == 0:
         print(
             f"The selected component <{component_name}> has not been manually positioned yet!"
         )
-        exit()
+        return None
+
+    all_hint = "all, " if allow_all else ""
     sub_location = input(
-        f"Which corner do you want to test (all, {available_locations}): "
+        f"Which corner do you want to test ({all_hint}{available_locations}): "
     ).lower()
+
+    if (not allow_all) and sub_location == "all":
+        print("Selecting 'all' is not allowed for this operation.")
+        return None
+
     result = []
     if sub_location == "all":
         for sub_location in available_locations:
@@ -816,6 +1198,152 @@ def get_user_confirmation(confirm=""):
     return None
 
 
+def get_tool_name_from_user(location_name: str) -> Optional[RobotTool]:
+    """Prompt user to choose suction or gripper for a manual core location."""
+    print(f"Which tool do you want to use for {location_name}?")
+    print("[1] suction")
+    print("[2] gripper")
+    print("[E] Exit")
+    selection = input(":> ").strip().lower()
+    if selection in ("e", "exit"):
+        print("Cancelling manual adjustment...")
+        return None
+    if selection in ("1", "s", "suction"):
+        return RobotTool.SUCTION
+    if selection in ("2", "g", "gripper"):
+        return RobotTool.GRIPPER
+    print(f"Invalid tool selection '{selection}'.")
+    return None
+
+
+def get_manual_core_location_from_user(robot):
+    """Prompt user to select one core location for manual adjustment."""
+    tray_components = [
+        Components.CathodeCase.name,
+        Components.Cathode.name,
+        Components.Spacer.name,
+        Components.SpacerExtra.name,
+        Components.Anode.name,
+        Components.Washer.name,
+        Components.Separator.name,
+        Components.AnodeCase.name,
+    ]
+
+    print("Select a core location to adjust:")
+    for i, name in enumerate(tray_components, 1):
+        print(f"[{i}] {name} tray anchor")
+    print("[9] Lookup camera")
+    print("[10] Placement pedestal")
+    print("[E] Exit")
+
+    selection = input(":> ").strip().lower()
+    if selection in ("e", "exit"):
+        print("Cancelling manual adjustment...")
+        return None
+
+    try:
+        index = int(selection)
+    except ValueError:
+        print(f"Invalid selection '{selection}'.")
+        return None
+
+    if 1 <= index <= len(tray_components):
+        component_name = tray_components[index - 1]
+        tray_results = get_component_location_from_user(
+            robot,
+            component_prompt="",
+            selected_component_name=component_name,
+            allow_all=False,
+        )
+        if tray_results is None or len(tray_results) != 1:
+            return None
+
+        shape, grabpos, railpos, sub_location, component_name = tray_results[0]
+
+        well_index = get_location_index_from_user(shape, sub_location)
+        if not (0 <= well_index < len(grabpos)):
+            print(
+                f"Invalid well index '{well_index}' for sub-location '{sub_location}'."
+            )
+            return None
+
+        return {
+            "name": f"{component_name} tray ({sub_location}, well {well_index})",
+            "rail_position": railpos,
+            "base_position": grabpos[well_index],
+            "component_name": component_name,
+            "use_pick_position": True,
+        }
+
+    if index == 9:
+        tool_name = get_tool_name_from_user("Lookup camera")
+        if tool_name is None:
+            return None
+        return {
+            "name": "Lookup camera",
+            "rail_position": robot.assemblyRobotConstants.LOOKUP_CAM_RAIL_LOCATION,
+            "base_position": (
+                robot.assemblyRobotConstants.LOOKUP_CAM_SK_PO
+                if tool_name == RobotTool.SUCTION
+                else robot.assemblyRobotConstants.LOOKUP_CAM_GRIPPER_PO
+            ),
+            "component_name": "suction",
+            "use_pick_position": False,
+            "tool_name": tool_name,
+        }
+
+    if index == 10:
+        tool_name = get_tool_name_from_user("Placement pedestal")
+        if tool_name is None:
+            return None
+        return {
+            "name": "Placement pedestal",
+            "rail_position": robot.assemblyRobotConstants.POST_RAIL_LOCATION,
+            "base_position": (
+                robot.assemblyRobotConstants.POST_C_SK_PO
+                if tool_name == RobotTool.SUCTION
+                else robot.assemblyRobotConstants.POST_C_GRIPPER_PO
+            ),
+            "component_name": "suction",
+            "use_pick_position": False,
+            "z_lower_limit": (
+                robot.assemblyRobotConstants.POST_C_SK_PO[2]
+                if tool_name == RobotTool.SUCTION
+                else robot.assemblyRobotConstants.POST_C_GRIPPER_PO[2]
+            ),
+            "tool_name": tool_name,
+            "initial_z_offset": 4.0,
+        }
+
+    print(f"Selection '{selection}' is out of range.")
+    return None
+
+
+def read_keypress() -> str:
+    """Read one keypress, including terminal arrow escape sequences."""
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        key = sys.stdin.read(1)
+        if key == "\x1b":
+            next_char = sys.stdin.read(1)
+            if next_char == "[":
+                arrow = sys.stdin.read(1)
+                if arrow == "A":
+                    return "UP"
+                if arrow == "B":
+                    return "DOWN"
+                if arrow == "C":
+                    return "RIGHT"
+                if arrow == "D":
+                    return "LEFT"
+            return "ESC"
+        return key
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
 def assembly_robot_command_loop(
     robot: AssemblyRobot,
     image_path="/home/yuanjian/Research/BatteryLab/images",
@@ -826,9 +1354,11 @@ def assembly_robot_command_loop(
 [M] to move a component to the assembly post.
 [C] to take a photo of the desired tray.
 [L] to grab a component and move to the lookup camera for a picture.
-[Z] to move to a component well for manual adjustment.
+[Z] to manually adjust the robot arm at set positions
 [0] to move the assembly robot out of the way
 [H] to auto-grab one of each component and save lookup photos for Hough tuning.
+[R] to reload the robotic placement and re-check for machine vision constants from the YAML files
+[MV] to force recalibration of machine vision parameters
 :> """
 
     component_prompt = """Which type of component do you want to test? Choose from the following
@@ -847,9 +1377,18 @@ def assembly_robot_command_loop(
             results = get_component_location_from_user(robot, component_prompt)
             if results == None:
                 continue
+            reteach_mode = (
+                input("Enter re-teaching mode? (y/n, default n): ").strip().lower()
+                == "y"
+            )
             test_all = input(
                 f"Do you want to test the four corners or test all? (all/corners) default is corners:"
             )
+            if reteach_mode and test_all == "all":
+                print(
+                    "Re-teaching mode only supports corner wells. Switching to corners mode."
+                )
+                test_all = "corners"
             for shape, grabpos, railpos, sub_location, component_name in results:
                 test_range = [
                     0,
@@ -861,17 +1400,74 @@ def assembly_robot_command_loop(
 
                 if test_all == "all":
                     test_range = range(0, len(grabpos))
+
+                if component_name == "Washer":
+                    robot.rail_meca500.change_tool(tool_name=RobotTool.GRIPPER)
+                else:
+                    robot.rail_meca500.change_tool(tool_name=RobotTool.SUCTION)
+                robot.rail_meca500.move_home()
+                robot.move_zaber_rail(railpos)
+                robot.rail_meca500.move_to_pick_position(grabpos[test_range[0]], level=1.0)
+
                 for i in test_range:
                     print(f"reaching the position of well {i}: {grabpos[i]}")
+                    if reteach_mode:
+                        adjusted_pose = robot.manual_arm_control_mode(
+                            rail_position=railpos,
+                            base_position=grabpos[i],
+                            level=0.0,
+                            component_name=component_name,
+                            step_size=0.5,
+                            use_pick_position=True,
+                            skip_prep=True,
+                        )
+                        save_adjusted = input(
+                            "Save adjusted pose for this well (persist + current session)? (y/n, default y): "
+                        ).strip().lower()
+                        if save_adjusted in ("", "y", "yes"):
+                            try:
+                                robot._apply_single_well_pose_in_memory(
+                                    component_name=component_name,
+                                    sub_location=sub_location,
+                                    well_index=i,
+                                    adjusted_pose=adjusted_pose,
+                                )
+                                robot._persist_single_corner_pose_to_yaml(
+                                    component_name=component_name,
+                                    sub_location=sub_location,
+                                    shape=shape,
+                                    well_index=i,
+                                    adjusted_pose=adjusted_pose,
+                                )
+                                print(
+                                    f"Replaced YAML corner pose for {component_name}/{sub_location}/index {i}."
+                                )
+                            except Exception as e:
+                                print(
+                                    f"Failed to persist adjusted pose for {component_name}/{sub_location}/index {i}: {e}"
+                                )
+                            grabpos[i] = adjusted_pose
+                            print(f"Updated well {i} pose to: {grabpos[i]}")
+
                     robot.grab_component(
-                        railpos, grabpos[i], is_grab=True, component_name=component_name
+                        railpos,
+                        grabpos[i],
+                        is_grab=True,
+                        component_name=component_name,
+                        home_before=False,
+                        home_after=False,
+                        move_rail=False,
                     )
                     robot.grab_component(
                         railpos,
                         grabpos[i],
                         is_grab=False,
                         component_name=component_name,
+                        home_before=False,
+                        home_after=False,
+                        move_rail=False,
                     )
+                robot.rail_meca500.move_home()
         elif input_str == "C":
             # Take a photo of the selected tray
             component_name = input(component_prompt)
@@ -924,29 +1520,50 @@ def assembly_robot_command_loop(
             )
 
         elif input_str == "Z":
-            # Manual adjustment for well positions.
-            results = get_component_location_from_user(robot, component_prompt)
-            if results == None:
+            # Manual adjustment for core positions (8 trays + lookup + pedestal).
+            location = get_manual_core_location_from_user(robot)
+            if location is None:
                 continue
-            if len(results) != 1:
-                print("You can only adjust one component at a time. Operation aborted!")
-                continue
-            shape, grabpos, railpos, sub_location, component_name = results[0]
-            index = get_location_index_from_user(shape, sub_location)
-            if not (index >= 0 and index < len(grabpos)):
-                print("The index you give is not valid to do manual adjustment!")
-                continue
-            level = float(
-                input(
-                    "Please provide the level you want the manual adjustment to be (1 is highest, and 0 is closest to the tray):"
-                )
+
+            level = 0.0
+            if location["use_pick_position"]:
+                try:
+                    level = float(
+                        input(
+                            "Please provide the level for tray adjustment (1 is highest, 0 is closest to tray):"
+                        )
+                    )
+                    level = max(0.0, min(1.0, level))
+                except ValueError:
+                    print("Invalid level. Using default level 1.0")
+                    level = 1.0
+
+            initial_step = 1.0
+            step_input = input(
+                "Initial manual step size (recommended 0.5~1.5, press Enter for 1.0): "
+            ).strip()
+            if step_input != "":
+                try:
+                    initial_step = float(step_input)
+                except ValueError:
+                    print(f"Cannot parse '{step_input}'. Using default 1.0")
+
+            print(
+                f"Manual control at {location['name']}. Keys: up(-x), down(+x), right(+y), left(-y), u(+z), d(-z), p(print), o(return to base), space(pause), r(resume), +, -, i, q"
             )
-            robot.manual_adjustment(railpos, grabpos[index], level)
-            finished = input(
-                "Have you finished adjusting? Press Enter to move up and home the robot:"
+            robot.manual_arm_control_mode(
+                location["rail_position"],
+                location["base_position"],
+                level=level,
+                component_name=location["component_name"],
+                step_size=initial_step,
+                use_pick_position=location["use_pick_position"],
+                z_lower_limit=location.get("z_lower_limit"),
+                tool_name=location.get("tool_name"),
+                initial_z_offset=location.get("initial_z_offset", 0.0),
             )
-            robot.manual_adjustment(railpos, grabpos[index], 1)
             robot.rail_meca500.move_home()
+            
         elif input_str == "L":
             # Move a component to the lookup camera for a picture
             results = get_component_location_from_user(robot, component_prompt)
@@ -977,6 +1594,11 @@ def assembly_robot_command_loop(
         elif input_str == "H":
             # Automatically grab one of each component and capture lookup images
             robot.capture_lookup_images_for_all_components()
+        elif input_str == "R":
+            robot.load_position_files()
+            robot.calibrate_machine_vision(force=False)
+        elif input_str == "MV":
+            robot.calibrate_machine_vision(force=True)
         else:
             print(f"Input {input_str} not recognized! Try again.")
 

@@ -3,14 +3,125 @@ from .CrimperRobot import CrimperRobot, crimper_robot_command_loop
 from .LiquidRobot import LiquidRobot, liquid_robot_command_loop
 from BatteryLab.robots.Constants import Components
 
+import csv
+import re
 import rclpy
 from rclpy.node import Node
+from pathlib import Path
+from datetime import datetime
+from typing import Optional
+import cv2
+
+
+def _component_slug(component_name: str) -> str:
+    component_name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", component_name)
+    component_name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", component_name)
+    return component_name.lower()
+
+
+class BatterySessionTracker:
+    def __init__(self, session_root: Path):
+        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.session_dir = session_root / f"session_{self.session_id}"
+        self.lookup_image_dir = self.session_dir / "lookup_images"
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        self.lookup_image_dir.mkdir(parents=True, exist_ok=True)
+
+        self.records_path = self.session_dir / "battery_records.csv"
+        self._battery_records = []
+        self._battery_index = 0
+        self.component_order = [
+            Components.CathodeCase,
+            Components.Washer,
+            Components.Spacer,
+            Components.Cathode,
+            Components.Separator,
+            Components.Anode,
+            Components.SpacerExtra,
+            Components.AnodeCase,
+        ]
+        self.fieldnames = [
+            "battery_id",
+            "session_id",
+            "battery_start_time",
+            "battery_end_time",
+            "battery_status",
+        ]
+        for component in self.component_order:
+            slug = _component_slug(component.name)
+            self.fieldnames.extend(
+                [
+                    f"{slug}_dx",
+                    f"{slug}_dy",
+                    f"{slug}_detected",
+                    f"{slug}_lookup_image",
+                ]
+            )
+        self._flush()
+
+    def start_battery(self):
+        self._battery_index += 1
+        record = {
+            "battery_id": self._battery_index,
+            "session_id": self.session_id,
+            "battery_start_time": datetime.now().isoformat(timespec="seconds"),
+            "battery_end_time": "",
+            "battery_status": "running",
+        }
+        for component in self.component_order:
+            slug = _component_slug(component.name)
+            record[f"{slug}_dx"] = ""
+            record[f"{slug}_dy"] = ""
+            record[f"{slug}_detected"] = ""
+            record[f"{slug}_lookup_image"] = ""
+        self._battery_records.append(record)
+        self._flush()
+        return record
+
+    def record_component_result(
+        self,
+        battery_record: dict,
+        component: Components,
+        result: dict,
+        order: int,
+    ):
+        slug = _component_slug(component.name)
+        battery_record[f"{slug}_dx"] = f"{float(result.get('dx', 0.0)):.6f}"
+        battery_record[f"{slug}_dy"] = f"{float(result.get('dy', 0.0)):.6f}"
+        battery_record[f"{slug}_detected"] = bool(result.get("component_detected", False))
+
+        if not result.get("component_detected", False):
+            lookup_image = result.get("lookup_image")
+            if lookup_image is not None:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                filename = (
+                    self.lookup_image_dir
+                    / f"battery_{battery_record['battery_id']:03d}_step_{order:02d}_{slug}_{timestamp}.png"
+                )
+                cv2.imwrite(str(filename), lookup_image)
+                battery_record[f"{slug}_lookup_image"] = str(filename)
+        self._flush()
+
+    def finish_battery(self, battery_record: dict, status: str):
+        battery_record["battery_end_time"] = datetime.now().isoformat(timespec="seconds")
+        battery_record["battery_status"] = status
+        self._flush()
+
+    def _flush(self):
+        with open(self.records_path, "w", newline="") as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=self.fieldnames)
+            writer.writeheader()
+            for record in self._battery_records:
+                writer.writerow(record)
 
 
 class AutoBatteryLab(Node):
     def __init__(self):
         super().__init__("auto_battery_lab")
         logger = self.get_logger()
+        session_root = Path(__file__).resolve().parents[4] / "images" / "battery_sessions"
+        self.session_tracker = BatterySessionTracker(session_root)
+        logger.info(f"Battery session records will be stored in {self.session_tracker.session_dir}")
         # Initialize the Assembly Robot
         self.assembly_robot = AssemblyRobot(
             logger=logger, robot_address="192.168.0.100"
@@ -31,7 +142,12 @@ class AutoBatteryLab(Node):
         self.crimper_robot.initialize_and_home_robots()
         logger.info("Finished intializing the Auto Battery Lab")
 
-    def put_a_component_on_assembly_post(self, component: Components, order: int):
+    def put_a_component_on_assembly_post(
+        self,
+        component: Components,
+        order: int,
+        battery_record: Optional[dict] = None,
+    ):
         component_name = component.name
         global_index, subtray_shape, well_grab_pos, rail_pos, subtray_name = (
             self.assembly_robot.get_next_well_of_component(component_name)
@@ -56,83 +172,111 @@ class AutoBatteryLab(Node):
             component_name=component_name,
         )
 
-        self.assembly_robot.drop_current_component_to_assembly_post(
+        result = self.assembly_robot.drop_current_component_to_assembly_post(
             order=order, component=component, premove_callback=premove_callback
         )
+        if battery_record is not None:
+            self.session_tracker.record_component_result(
+                battery_record=battery_record,
+                component=component,
+                result=result,
+                order=order,
+            )
 
         if premove_callback is not None:
             self.crimper_robot.release_separator()  # open gripper and move back home
 
     def assemble_a_battery(self):
+        battery_record = self.session_tracker.start_battery()
         # Prepare all the robots and home them
-        rail_pos = self.assembly_robot.get_rail_pos()
-        if rail_pos == -1:
-            self.get_logger().error(
-                "The current linear rail pos cannot be determined! Check the status!"
+        try:
+            rail_pos = self.assembly_robot.get_rail_pos()
+            if rail_pos == -1:
+                raise RuntimeError(
+                    "The current linear rail pos cannot be determined! Check the status!"
+                )
+            if rail_pos > 15:
+                self.assembly_robot.move_home_and_out_of_way()
+            self.liquid_robot.move_home()
+            self.crimper_robot.move_home()
+            order = 0
+            # 1. Put a Cathode Case on the assembly post
+            self.put_a_component_on_assembly_post(
+                Components.CathodeCase, order, battery_record=battery_record
             )
-            return
-        if rail_pos > 15:
+            order += 1
+            # 2. Put the Washer
+            self.put_a_component_on_assembly_post(
+                Components.Washer, order, battery_record=battery_record
+            )
+            order += 1
+            # 3. Put the Spacer
+            self.put_a_component_on_assembly_post(
+                Components.Spacer, order, battery_record=battery_record
+            )
+            order += 1
+            # 4. Put the Cathode
+            self.put_a_component_on_assembly_post(
+                Components.Cathode, order, battery_record=battery_record
+            )
+            order += 1
+            # 5. Put the Separator
+            self.put_a_component_on_assembly_post(
+                Components.Separator, order, battery_record=battery_record
+            )
+            order += 1
+            # 6. Add the electrolyte - (1) Move assembly robot out of the way
+            self.assembly_robot.move_home_and_out_of_way(home=8.0)
+            rail_pos = self.assembly_robot.get_rail_pos()
+            if rail_pos == -1 or rail_pos > 10:
+                raise RuntimeError(
+                    "The current linear rail pos cannot be cleared! Check the status!"
+                )
+            # 6.(2) Add electrolyte
+            self.liquid_robot.MG400.move_home()
+            # TODO: change tip for different electrolytes
+            tip_x, tip_y = 0, 0
+            liquid_x, liquid_y = 0, 0
+            volume_to_get, volume_for_a_battery = 50, 50
+            self.liquid_robot.MG400.get_tip(tip_x, tip_y)
+            # TODO: change liquid bottle location for different electrolytes
+            self.liquid_robot.MG400.get_liquid(liquid_x, liquid_y, volume_to_get)
+            self.liquid_robot.MG400.add_liquid_to_post(volume_for_a_battery)
+            self.liquid_robot.MG400.return_liquid(liquid_x, liquid_y)
+            self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
+            self.liquid_robot.MG400.move_home()
+            # 7. Put the Anode
+            self.put_a_component_on_assembly_post(
+                Components.Anode, order, battery_record=battery_record
+            )
+            order += 1
+            # 8. Put the SpacerExtra
+            self.put_a_component_on_assembly_post(
+                Components.SpacerExtra, order, battery_record=battery_record
+            )
+            order += 1
+            # 9. Put the AnodeCase
+            self.put_a_component_on_assembly_post(
+                Components.AnodeCase, order, battery_record=battery_record
+            )
+            order += 1
             self.assembly_robot.move_home_and_out_of_way()
-        self.liquid_robot.move_home()
-        self.crimper_robot.move_home()
-        order = 0
-        # 1. Put a Cathode Case on the assembly post
-        self.put_a_component_on_assembly_post(Components.CathodeCase, order)
-        order += 1
-        # 2. Put the Washer
-        self.put_a_component_on_assembly_post(Components.Washer, order)
-        order += 1
-        # 3. Put the Spacer
-        self.put_a_component_on_assembly_post(Components.Spacer, order)
-        order += 1
-        # 4. Put the Cathode
-        self.put_a_component_on_assembly_post(Components.Cathode, order)
-        order += 1
-        # 5. Put the Separator
-        self.put_a_component_on_assembly_post(Components.Separator, order)
-        order += 1
-        # 6. Add the electrolyte - (1) Move assembly robot out of the way
-        self.assembly_robot.move_home_and_out_of_way(home=8.0)
-        rail_pos = self.assembly_robot.get_rail_pos()
-        if rail_pos == -1 or rail_pos > 10:
-            self.get_logger().error(
-                "The current linear rail pos cannot be cleared! Check the status!"
+            rail_pos = self.assembly_robot.get_rail_pos()
+            if rail_pos == -1 or rail_pos > 35:
+                raise RuntimeError(
+                    "The current linear rail pos cannot be cleared! Check the status!"
+                )
+            # 10. Crimper Robot
+            self.crimper_robot.crimp_a_battery(False)
+            self.crimper_robot.put_to_storage()
+            self.crimper_robot.move_home()
+            self.assembly_robot.save_counter_config()
+            self.session_tracker.finish_battery(battery_record, status="completed")
+        except Exception:
+            self.session_tracker.finish_battery(
+                battery_record, status="failed"
             )
-            return
-        # 6.(2) Add electrolyte
-        self.liquid_robot.MG400.move_home()
-        # TODO: change tip for different electrolytes
-        tip_x, tip_y = 0, 0
-        liquid_x, liquid_y = 0, 0
-        volume_to_get, volume_for_a_battery = 50, 50
-        self.liquid_robot.MG400.get_tip(tip_x, tip_y)
-        # TODO: change liquid bottle location for different electrolytes
-        self.liquid_robot.MG400.get_liquid(liquid_x, liquid_y, volume_to_get)
-        self.liquid_robot.MG400.add_liquid_to_post(volume_for_a_battery)
-        self.liquid_robot.MG400.return_liquid(liquid_x, liquid_y)
-        self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
-        self.liquid_robot.MG400.move_home()
-        # 7. Put the Anode
-        self.put_a_component_on_assembly_post(Components.Anode, order)
-        order += 1
-        # 8. Put the SpacerExtra
-        self.put_a_component_on_assembly_post(Components.SpacerExtra, order)
-        order += 1
-        # 9. Put the AnodeCase
-        self.put_a_component_on_assembly_post(Components.AnodeCase, order)
-        order += 1
-        self.assembly_robot.move_home_and_out_of_way()
-        rail_pos = self.assembly_robot.get_rail_pos()
-        if rail_pos == -1 or rail_pos > 35:
-            self.get_logger().error(
-                "The current linear rail pos cannot be cleared! Check the status!"
-            )
-            return
-        # 10. Crimper Robot
-        self.crimper_robot.crimp_a_battery(False)
-        self.crimper_robot.put_to_storage()
-        self.crimper_robot.move_home()
-        self.assembly_robot.save_counter_config()
+            raise
 
     def test_separator_placement(self):
         # Test new crimper-assisted separator placement method
@@ -158,7 +302,10 @@ def command_loop(batterylab: AutoBatteryLab):
         elif user_input == "c":
             crimper_robot_command_loop(batterylab.crimper_robot)
         elif user_input == "b":
-            batterylab.assemble_a_battery()
+            try:
+                batterylab.assemble_a_battery()
+            except Exception as e:
+                batterylab.get_logger().error(f"Battery assembly failed: {e}")
         elif user_input == "s":
             if input("Run separator placement test? (y/n, default n): ").strip().lower() == "y":
                 batterylab.test_separator_placement()
