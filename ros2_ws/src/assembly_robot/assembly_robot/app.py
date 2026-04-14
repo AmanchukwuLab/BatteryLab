@@ -2,9 +2,18 @@ from .AssemblyRobot import AssemblyRobot, assembly_robot_command_loop
 from .CrimperRobot import CrimperRobot, crimper_robot_command_loop
 from .LiquidRobot import LiquidRobot, liquid_robot_command_loop
 from BatteryLab.robots.Constants import Components
+from BatteryLab.electrolyte_planner import (
+    DEFAULT_STATE_PATH,
+    clear_vial,
+    load_inventory_state,
+    print_vial_statuses,
+    save_inventory_state,
+    set_vial_contents,
+)
 
 import csv
 import re
+import statistics
 import rclpy
 from rclpy.node import Node
 from pathlib import Path
@@ -20,6 +29,10 @@ def _component_slug(component_name: str) -> str:
 
 
 class BatterySessionTracker:
+    LARGE_ADJUSTMENT_STATIC_THRESHOLD = 1.0
+    LARGE_ADJUSTMENT_MIN_SAMPLES = 5
+    LARGE_ADJUSTMENT_MAD_MULTIPLIER = 3.0
+
     def __init__(self, session_root: Path):
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.session_dir = session_root / f"session_{self.session_id}"
@@ -30,6 +43,7 @@ class BatterySessionTracker:
         self.records_path = self.session_dir / "battery_records.csv"
         self._battery_records = []
         self._battery_index = 0
+        self._component_adjust_history = {}
         self.component_order = [
             Components.CathodeCase,
             Components.Washer,
@@ -55,8 +69,10 @@ class BatterySessionTracker:
                     f"{slug}_dy",
                     f"{slug}_detected",
                     f"{slug}_lookup_image",
+                    f"{slug}_lookup_reason",
                 ]
             )
+            self._component_adjust_history[slug] = {"dx": [], "dy": []}
         self._flush()
 
     def start_battery(self):
@@ -74,9 +90,32 @@ class BatterySessionTracker:
             record[f"{slug}_dy"] = ""
             record[f"{slug}_detected"] = ""
             record[f"{slug}_lookup_image"] = ""
+            record[f"{slug}_lookup_reason"] = ""
         self._battery_records.append(record)
         self._flush()
         return record
+
+    def _is_large_adjustment_outlier(self, slug: str, dx: float, dy: float) -> bool:
+        axis_values = {
+            "dx": abs(dx),
+            "dy": abs(dy),
+        }
+        for axis, value in axis_values.items():
+            history = self._component_adjust_history[slug][axis]
+            if len(history) < self.LARGE_ADJUSTMENT_MIN_SAMPLES:
+                continue
+            median = statistics.median(history)
+            deviations = [abs(v - median) for v in history]
+            mad = statistics.median(deviations)
+            if mad <= 1e-9:
+                continue
+            if abs(value - median) > self.LARGE_ADJUSTMENT_MAD_MULTIPLIER * mad:
+                return True
+        return False
+
+    def _append_adjustment_history(self, slug: str, dx: float, dy: float):
+        self._component_adjust_history[slug]["dx"].append(abs(dx))
+        self._component_adjust_history[slug]["dy"].append(abs(dy))
 
     def record_component_result(
         self,
@@ -86,11 +125,32 @@ class BatterySessionTracker:
         order: int,
     ):
         slug = _component_slug(component.name)
-        battery_record[f"{slug}_dx"] = f"{float(result.get('dx', 0.0)):.6f}"
-        battery_record[f"{slug}_dy"] = f"{float(result.get('dy', 0.0)):.6f}"
-        battery_record[f"{slug}_detected"] = bool(result.get("component_detected", False))
+        dx = float(result.get("dx", 0.0))
+        dy = float(result.get("dy", 0.0))
+        component_detected = bool(result.get("component_detected", False))
 
-        if not result.get("component_detected", False):
+        battery_record[f"{slug}_dx"] = f"{dx:.6f}"
+        battery_record[f"{slug}_dy"] = f"{dy:.6f}"
+        battery_record[f"{slug}_detected"] = component_detected
+
+        capture_reasons = []
+        if not component_detected:
+            capture_reasons.append("detection_failed")
+
+        large_static = (
+            abs(dx) > self.LARGE_ADJUSTMENT_STATIC_THRESHOLD
+            or abs(dy) > self.LARGE_ADJUSTMENT_STATIC_THRESHOLD
+        )
+        if large_static:
+            capture_reasons.append("large_adjustment_static")
+
+        large_outlier = self._is_large_adjustment_outlier(slug, dx, dy)
+        if large_outlier:
+            capture_reasons.append("large_adjustment_outlier")
+
+        should_capture = len(capture_reasons) > 0
+
+        if should_capture:
             lookup_image = result.get("lookup_image")
             if lookup_image is not None:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -100,6 +160,13 @@ class BatterySessionTracker:
                 )
                 cv2.imwrite(str(filename), lookup_image)
                 battery_record[f"{slug}_lookup_image"] = str(filename)
+                battery_record[f"{slug}_lookup_reason"] = ";".join(capture_reasons)
+            else:
+                battery_record[f"{slug}_lookup_reason"] = (
+                    ";".join(capture_reasons) + ";image_unavailable"
+                )
+
+        self._append_adjustment_history(slug, dx, dy)
         self._flush()
 
     def finish_battery(self, battery_record: dict, status: str):
@@ -283,10 +350,175 @@ class AutoBatteryLab(Node):
         self.put_a_component_on_assembly_post(Components.Separator, order=4)
 
 
+def _read_positive_float(prompt: str) -> float:
+    while True:
+        raw = input(prompt).strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            print("Please enter a numeric value.")
+            continue
+        if value <= 0:
+            print("Please enter a value greater than zero.")
+            continue
+        return value
+
+
+def _is_cancel(value: str) -> bool:
+    return value.strip().lower() in {"q", "x", "cancel"}
+
+
+def _read_positive_float_or_cancel(prompt: str):
+    while True:
+        raw = input(prompt).strip()
+        if _is_cancel(raw):
+            return None
+        try:
+            value = float(raw)
+        except ValueError:
+            print("Please enter a numeric value, or type 'q' to cancel.")
+            continue
+        if value <= 0:
+            print("Please enter a value greater than zero.")
+            continue
+        return value
+
+
+def _read_non_negative_int_or_cancel(prompt: str):
+    while True:
+        raw = input(prompt).strip()
+        if _is_cancel(raw):
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            print("Please enter an integer value, or type 'q' to cancel.")
+            continue
+        if value < 0:
+            print("Please enter a value greater than or equal to zero.")
+            continue
+        return value
+
+
+def electrolyte_planner_menu(batterylab: AutoBatteryLab):
+    logger = batterylab.get_logger()
+    inventory = load_inventory_state()
+    logger.info(f"Loaded electrolyte inventory from {DEFAULT_STATE_PATH}")
+
+    prompt = """------------------------
+Electrolyte Planner Menu
+[V]iew vial status
+[A]dd/update vial contents (after physical refill)
+[C]leaned vial (mark as empty)
+[R]eload inventory from disk
+[S]ave inventory to disk
+[Enter] Back to main menu
+:> """
+
+    while True:
+        user_input = input(prompt).strip().lower()
+        if len(user_input) > 1:
+            user_input = user_input[0]
+
+        if user_input == "":
+            break
+        if user_input == "v":
+            print_vial_statuses(inventory)
+            continue
+        if user_input == "a":
+            print("Type 'q' at any prompt to cancel this operation.")
+            x_ind = _read_non_negative_int_or_cancel("Liquid bottle index x: ")
+            if x_ind is None:
+                print("Canceled add/update operation.")
+                continue
+
+            y_ind = _read_non_negative_int_or_cancel("Liquid bottle index y: ")
+            if y_ind is None:
+                print("Canceled add/update operation.")
+                continue
+
+            solution_name = input("Solution name: ").strip()
+            if _is_cancel(solution_name):
+                print("Canceled add/update operation.")
+                continue
+
+            density_g_per_ml = _read_positive_float_or_cancel("Density (g/mL): ")
+            if density_g_per_ml is None:
+                print("Canceled add/update operation.")
+                continue
+
+            volume_ul = _read_positive_float_or_cancel("Current volume in vial (uL): ")
+            if volume_ul is None:
+                print("Canceled add/update operation.")
+                continue
+
+            try:
+                inventory = set_vial_contents(
+                    inventory,
+                    x_ind=x_ind,
+                    y_ind=y_ind,
+                    solution_name=solution_name,
+                    volume_ul=volume_ul,
+                    density_g_per_ml=density_g_per_ml,
+                )
+                save_inventory_state(inventory)
+                print(
+                    f"Updated vial at (x={x_ind}, y={y_ind}) and saved inventory."
+                )
+            except Exception as e:
+                print(f"Failed to update vial: {e}")
+            continue
+        if user_input == "c":
+            print("Type 'q' to cancel this operation.")
+            x_ind = _read_non_negative_int_or_cancel(
+                "Liquid bottle index x to mark cleaned/empty: "
+            )
+            if x_ind is None:
+                print("Canceled clean operation.")
+                continue
+
+            y_ind = _read_non_negative_int_or_cancel(
+                "Liquid bottle index y to mark cleaned/empty: "
+            )
+            if y_ind is None:
+                print("Canceled clean operation.")
+                continue
+
+            confirm = input(
+                f"Confirm cleaning vial at (x={x_ind}, y={y_ind})? This sets its volume to 0.0 uL (y/n or q to cancel): "
+            ).strip().lower()
+            if _is_cancel(confirm):
+                print("Canceled clean operation.")
+                continue
+            if confirm != "y":
+                print("Canceled.")
+                continue
+            try:
+                inventory = clear_vial(inventory, x_ind=x_ind, y_ind=y_ind)
+                save_inventory_state(inventory)
+                print(
+                    f"Marked vial at (x={x_ind}, y={y_ind}) as cleaned and saved inventory."
+                )
+            except Exception as e:
+                print(f"Failed to clear vial: {e}")
+            continue
+        if user_input == "r":
+            inventory = load_inventory_state()
+            print("Reloaded inventory from disk.")
+            continue
+        if user_input == "s":
+            save_inventory_state(inventory)
+            print("Saved inventory to disk.")
+            continue
+
+        print("The choice is not valid. Please try again.")
+
+
 def command_loop(batterylab: AutoBatteryLab):
     prompt = """Press [Enter] to quit, [A]ssembly to go to assembly_robot's command list,
 [L]iquid to go to liquid_robot's command list, [C]rimper to go to crimper_robot's command list.
 [B]attery to finish assemble a battery from scratch to storage.
+[E]lectrolyte planner to manage vial contents and cleaning status.
 :> """
     batterylab.assembly_robot.load_counter_config()
     while True:
@@ -306,6 +538,8 @@ def command_loop(batterylab: AutoBatteryLab):
                 batterylab.assemble_a_battery()
             except Exception as e:
                 batterylab.get_logger().error(f"Battery assembly failed: {e}")
+        elif user_input == "e":
+            electrolyte_planner_menu(batterylab)
         elif user_input == "s":
             if input("Run separator placement test? (y/n, default n): ").strip().lower() == "y":
                 batterylab.test_separator_placement()

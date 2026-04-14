@@ -39,7 +39,7 @@ class BreadBoardMeca500(Meca500):
         self.robot.SetTrf(*self.crimperRobotConstants.TRF)
         self.robot.SetGripperForce(self.RobotConstants.GRIP_F)
         self.robot.SetGripperVel(self.RobotConstants.GRIP_VEL)
-        self.move_home(tool=RobotTool.SUCTION)
+        self.move_home(tool=RobotTool.GRIPPER)
 
     def close_gripper(self):
         self.robot.GripperClose()
@@ -65,8 +65,7 @@ class BreadBoardMeca500(Meca500):
     def return_from_pick_up(self):
         self.robot.MoveLin(*self.crimperRobotConstants.GrabbedUpPose)
         self.robot.Delay(0.5)
-        # Suction is used to zero the Crimper Robot joints
-        self.move_home(tool=RobotTool.SUCTION)
+        self.move_home(tool=RobotTool.GRIPPER)
 
     def pick_up_from_assembly_post(self):
         self.move_to_pick_up_ready_pose()
@@ -101,7 +100,7 @@ class BreadBoardMeca500(Meca500):
         self.robot.WaitIdle(10)
         self.robot.MoveLin(*self.crimperRobotConstants.CrimperReadyToOperatePose)
         self.robot.WaitIdle(10)
-        self.move_home(tool=RobotTool.SUCTION)
+        self.move_home(tool=RobotTool.GRIPPER)
 
     def drop_back_to_assembly_post(self):
         self.robot.SetTrf(*self.crimperRobotConstants.TRF)
@@ -113,7 +112,7 @@ class BreadBoardMeca500(Meca500):
         self.robot.MoveLin(*grab_ready_pos)
         self.robot.WaitIdle()
         self.open_gripper()
-        self.move_home(tool=RobotTool.SUCTION)
+        self.move_home(tool=RobotTool.GRIPPER)
 
     def put_to_storage(self):
         self.robot.SetTrf(*self.crimperRobotConstants.TRF)
@@ -123,7 +122,7 @@ class BreadBoardMeca500(Meca500):
         self.robot.MoveLin(*self.crimperRobotConstants.StorageDropPose)
         self.robot.WaitIdle(20)
         self.open_gripper()
-        self.move_home(tool=RobotTool.SUCTION)
+        self.move_home(tool=RobotTool.GRIPPER)
 
     def move_for_photo_check(self):
         self.robot.SetTrf(*self.crimperRobotConstants.TRF)
@@ -137,7 +136,7 @@ class BreadBoardMeca500(Meca500):
         self.robot.SetTrf(*self.crimperRobotConstants.TRF)
         self.robot.MovePose(*self.crimperRobotConstants.PhotoCheckPreparePose)
         self.robot.WaitIdle(20)
-        self.move_home(tool=RobotTool.SUCTION)
+        self.move_home(tool=RobotTool.GRIPPER)
 
 
 def breadboard_meca500_example_app():

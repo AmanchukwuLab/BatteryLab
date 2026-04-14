@@ -29,11 +29,17 @@ class ImageClient(Node):
         if self.future.done():
             try:
                 response = self.future.result()
+                # Validate that image was actually captured with proper encoding
+                if not response.image.encoding:
+                    self.get_logger().error('Service call failed Unrecognized image encoding []')
+                    self.future = None
+                    return None
                 current_frame = self.br.imgmsg_to_cv2(response.image, 'bgr8')
                 self.future = None
                 return current_frame
             except Exception as e:
                 self.get_logger().error(f'Service call failed {str(e)}')
+                self.future = None
         return None
 
     def display_image(self):
@@ -41,7 +47,9 @@ class ImageClient(Node):
         if current_frame is not None:
             cv2.imshow("camera", current_frame)
             cv2.waitKey()
-            _ = input("Finished looking at your image? (Press Enter to continue):")        
+            _ = input("Finished looking at your image? (Press Enter to continue):")
+        else:
+            self.get_logger().error("Could not display image - capture failed")
         self.get_logger().info("finished executing display image")
 
 def main(args=None):

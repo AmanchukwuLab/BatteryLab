@@ -29,16 +29,16 @@ def format_vial_statuses(
 
     lines = [
         "Vial Status",
-        "vial_id | status | current_solution | previous_solution | remaining_uL | low_threshold_uL",
+        "x_ind | y_ind | status | current_solution | previous_solution | remaining_uL | low_threshold_uL",
         "-" * 88,
     ]
 
-    for vial in sorted(inventory.vials, key=lambda item: item.vial_id):
+    for vial in sorted(inventory.vials, key=lambda item: (item.x_ind, item.y_ind)):
         status = _status_label(vial, empty_threshold_ul)
         current_name = vial.current_solution_name or "-"
         previous_name = vial.previous_solution_name or "-"
         lines.append(
-            f"{vial.vial_id} | {status} | {current_name} | {previous_name} | "
+            f"{vial.x_ind} | {vial.y_ind} | {status} | {current_name} | {previous_name} | "
             f"{vial.volume_ul:.1f} | {vial.low_volume_threshold_ul:.1f}"
         )
 
@@ -65,11 +65,11 @@ def format_operation_update(result_payload: dict) -> str:
 
     usage = result_payload.get("vial_usage", [])
     if usage:
-        lines.append("vial_usage (solution, vial, used_uL, remaining_uL):")
+        lines.append("vial_usage (solution, x_ind, y_ind, used_uL, remaining_uL):")
         for item in usage:
             lines.append(
                 "- "
-                f"{item.get('solution_name')} | {item.get('vial_id')} | "
+                f"{item.get('solution_name')} | {item.get('x_ind')} | {item.get('y_ind')} | "
                 f"{float(item.get('used_volume_ul', 0.0)):.1f} | "
                 f"{float(item.get('remaining_volume_ul', 0.0)):.1f}"
             )
@@ -78,11 +78,11 @@ def format_operation_update(result_payload: dict) -> str:
 
     alerts = result_payload.get("vial_alerts", [])
     if alerts:
-        lines.append("alerts (vial, remaining_uL, low, empty_or_unusable):")
+        lines.append("alerts (x_ind, y_ind, remaining_uL, low, empty_or_unusable):")
         for alert in alerts:
             lines.append(
                 "- "
-                f"{alert.get('vial_id')} | "
+                f"{alert.get('x_ind')} | {alert.get('y_ind')} | "
                 f"{float(alert.get('remaining_volume_ul', 0.0)):.1f} | "
                 f"{bool(alert.get('low_volume_flag', False))} | "
                 f"{bool(alert.get('empty_or_unusable_flag', False))}"

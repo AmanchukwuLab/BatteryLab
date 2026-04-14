@@ -84,12 +84,13 @@ class TransferInstruction(BaseModel):
 
     step_index: int = Field(..., ge=1)
     ingredient_name: str = Field(..., min_length=1)
-    source_vial: str = Field(..., min_length=1)
+    source_x_ind: int = Field(..., ge=0)
+    source_y_ind: int = Field(..., ge=0)
     source_solution: str = Field(..., min_length=1)
     destination: str = Field(..., min_length=1)
     volume_ul: float = Field(..., gt=0)
 
-    @validator("ingredient_name", "source_vial", "source_solution", "destination")
+    @validator("ingredient_name", "source_solution", "destination")
     def _strip_text(cls, value: str) -> str:
         value = value.strip()
         if not value:
@@ -100,20 +101,14 @@ class TransferInstruction(BaseModel):
 class VialContents(BaseModel):
     """A stock vial that can be consumed across multiple sessions."""
 
-    vial_id: str = Field(..., min_length=1)
+    x_ind: int = Field(..., ge=0)
+    y_ind: int = Field(..., ge=0)
     current_solution_name: Optional[str] = None
     previous_solution_name: Optional[str] = None
     current_solution_density_g_per_ml: Optional[float] = Field(default=None, gt=0)
     volume_ul: float = Field(..., ge=0, le=VIAL_MAX_VOLUME_UL)
     capacity_ul: float = Field(default=VIAL_MAX_VOLUME_UL, gt=0, le=VIAL_MAX_VOLUME_UL)
     low_volume_threshold_ul: float = Field(default=DEFAULT_LOW_VOLUME_THRESHOLD_UL, ge=0)
-
-    @validator("vial_id")
-    def _strip_vial_id(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("must not be empty")
-        return value
 
     @validator("current_solution_name", "previous_solution_name", pre=True)
     def _normalize_optional_solution(cls, value: Optional[str]) -> Optional[str]:
@@ -142,30 +137,25 @@ class VialContents(BaseModel):
 class VialAlert(BaseModel):
     """Machine-readable alert for a vial nearing depletion."""
 
-    vial_id: str = Field(..., min_length=1)
+    x_ind: int = Field(..., ge=0)
+    y_ind: int = Field(..., ge=0)
     current_solution_name: Optional[str] = None
     previous_solution_name: Optional[str] = None
     remaining_volume_ul: float = Field(..., ge=0)
     low_volume_flag: bool
     empty_or_unusable_flag: bool
 
-    @validator("vial_id")
-    def _strip_vial_id(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("must not be empty")
-        return value
-
 
 class VialUsageRecord(BaseModel):
     """Volume consumed from a vial during one planned operation."""
 
-    vial_id: str = Field(..., min_length=1)
+    x_ind: int = Field(..., ge=0)
+    y_ind: int = Field(..., ge=0)
     solution_name: str = Field(..., min_length=1)
     used_volume_ul: float = Field(..., gt=0)
     remaining_volume_ul: float = Field(..., ge=0)
 
-    @validator("vial_id", "solution_name")
+    @validator("solution_name")
     def _strip_text(cls, value: str) -> str:
         value = value.strip()
         if not value:
@@ -211,7 +201,7 @@ class FormulationPlan(BaseModel):
 
 
 class Inventory(BaseModel):
-    """A vial inventory with unique vial IDs."""
+    """A vial inventory with unique x_ind/y_ind coordinates."""
 
     vials: List[VialContents] = Field(default_factory=list)
 
@@ -219,9 +209,12 @@ class Inventory(BaseModel):
     def _check_unique_vials(cls, vials: List[VialContents]) -> List[VialContents]:
         seen = set()
         for vial in vials:
-            if vial.vial_id in seen:
-                raise ValueError(f"duplicate vial_id: {vial.vial_id}")
-            seen.add(vial.vial_id)
+            key = (vial.x_ind, vial.y_ind)
+            if key in seen:
+                raise ValueError(
+                    f"duplicate vial coordinates: x_ind={vial.x_ind}, y_ind={vial.y_ind}"
+                )
+            seen.add(key)
         return vials
 
     def available_volume(self, solution_name: str) -> float:

@@ -27,9 +27,9 @@ from BatteryLab.electrolyte_planner import evaluate_formulation
 
 inventory = {
     "vials": [
-        {"vial_id": "A1", "current_solution_name": "LiPF6_1M", "current_solution_density_g_per_ml": 1.20, "volume_ul": 500},
-        {"vial_id": "A2", "current_solution_name": "EC_DMC_1to1", "current_solution_density_g_per_ml": 1.10, "volume_ul": 1200},
-        {"vial_id": "B1", "current_solution_name": "LiPF6_1M", "current_solution_density_g_per_ml": 1.20, "volume_ul": 300},
+        {"x_ind": 0, "y_ind": 0, "current_solution_name": "LiPF6_1M", "current_solution_density_g_per_ml": 1.20, "volume_ul": 500},
+        {"x_ind": 0, "y_ind": 1, "current_solution_name": "EC_DMC_1to1", "current_solution_density_g_per_ml": 1.10, "volume_ul": 1200},
+        {"x_ind": 1, "y_ind": 0, "current_solution_name": "LiPF6_1M", "current_solution_density_g_per_ml": 1.20, "volume_ul": 300},
     ]
 }
 
@@ -51,7 +51,7 @@ plan = evaluate_formulation(inventory, request)
 - `instructions`: a list of transfer steps,
 - `issues`: why the request could not be satisfied, if applicable.
 
-Transfer instructions use `source_vial` IDs.
+Transfer instructions use `source_x_ind` and `source_y_ind`.
 
 ## Weight-percent recipe example
 
@@ -60,8 +60,8 @@ from BatteryLab.electrolyte_planner import evaluate_formulation
 
 inventory = {
     "vials": [
-        {"vial_id": "A1", "current_solution_name": "EC", "current_solution_density_g_per_ml": 1.321, "volume_ul": 1000},
-        {"vial_id": "A2", "current_solution_name": "DMC", "current_solution_density_g_per_ml": 1.069, "volume_ul": 1000},
+        {"x_ind": 0, "y_ind": 0, "current_solution_name": "EC", "current_solution_density_g_per_ml": 1.321, "volume_ul": 1000},
+        {"x_ind": 0, "y_ind": 1, "current_solution_name": "DMC", "current_solution_density_g_per_ml": 1.069, "volume_ul": 1000},
     ]
 }
 
@@ -128,10 +128,10 @@ from BatteryLab.electrolyte_planner import (
 inventory = load_inventory_state()
 
 # Set or replace what is in a vial
-inventory = set_vial_contents(inventory, "A1", "LiPF6_1M", 1450, 1.20)
+inventory = set_vial_contents(inventory, 0, 0, "LiPF6_1M", 1450, 1.20)
 
 # Clear a vial while preserving previous_solution_name
-inventory = clear_vial(inventory, "A2")
+inventory = clear_vial(inventory, 0, 1)
 
 save_inventory_state(inventory)
 ```
@@ -161,5 +161,5 @@ print_operation_update(result)
 This includes:
 
 - feasibility + warning flags,
-- per-vial consumption (`solution_name`, `vial_id`, `used_volume_ul`, `remaining_volume_ul`),
+- per-vial consumption (`solution_name`, `x_ind`, `y_ind`, `used_volume_ul`, `remaining_volume_ul`),
 - current low/empty alerts.

@@ -24,7 +24,7 @@ def _serialize_model(model: FormulationPlan) -> dict:
 
 
 def _sort_vials(vials: Sequence[VialContents]) -> List[VialContents]:
-    return sorted(vials, key=lambda item: item.vial_id)
+    return sorted(vials, key=lambda item: (item.x_ind, item.y_ind))
 
 
 def _resolve_required_volumes(
@@ -69,9 +69,9 @@ def _resolve_required_volumes(
 
 def _allocate_from_vials(
     vials: Sequence[VialContents], solution_name: str, required_volume_ul: float
-) -> List[tuple[str, str, float]]:
+) -> List[tuple[int, int, str, float]]:
     remaining = required_volume_ul
-    transfers: List[tuple[str, str, float]] = []
+    transfers: List[tuple[int, int, str, float]] = []
 
     for vial in _sort_vials(vials):
         if remaining <= 0:
@@ -81,7 +81,7 @@ def _allocate_from_vials(
 
         transfer_volume = min(vial.volume_ul, remaining)
         if transfer_volume > 0:
-            transfers.append((vial.vial_id, solution_name, transfer_volume))
+            transfers.append((vial.x_ind, vial.y_ind, solution_name, transfer_volume))
             remaining -= transfer_volume
 
     return transfers
@@ -106,7 +106,8 @@ def _consume_solution_from_vials(
         if draw_volume > 0:
             usage_records.append(
                 VialUsageRecord(
-                    vial_id=vial.vial_id,
+                    x_ind=vial.x_ind,
+                    y_ind=vial.y_ind,
                     solution_name=solution_name,
                     used_volume_ul=draw_volume,
                     remaining_volume_ul=vial.volume_ul,
@@ -134,7 +135,8 @@ def _build_vial_alerts(
         if low_flag or empty_flag:
             alerts.append(
                 VialAlert(
-                    vial_id=vial.vial_id,
+                    x_ind=vial.x_ind,
+                    y_ind=vial.y_ind,
                     current_solution_name=vial.current_solution_name,
                     previous_solution_name=vial.previous_solution_name,
                     remaining_volume_ul=vial.volume_ul,
@@ -190,12 +192,13 @@ def plan_formulation(inventory: Inventory, request: FormulationRequest) -> Formu
             solution_name,
             required_volume,
         )
-        for source_vial, source_solution, volume_ul in transfers:
+        for source_x_ind, source_y_ind, source_solution, volume_ul in transfers:
             instructions.append(
                 TransferInstruction(
                     step_index=step_index,
                     ingredient_name=solution_name,
-                    source_vial=source_vial,
+                    source_x_ind=source_x_ind,
+                    source_y_ind=source_y_ind,
                     source_solution=source_solution,
                     destination=request.destination,
                     volume_ul=volume_ul,

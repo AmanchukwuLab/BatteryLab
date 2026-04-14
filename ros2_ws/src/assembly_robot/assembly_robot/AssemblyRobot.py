@@ -263,38 +263,48 @@ class AssemblyRobot(Node):
         dx = dy = 0.0
         component_detected = False
         lookup_image = img
-        try:
-            img_out, correction, component_detected = self.auto_correction.get_offset(
-                img, component=component, state=AssemblySteps.Drop
+        
+        # Check if image was successfully captured
+        if img is None:
+            self.get_logger().error(
+                f"Failed to capture image for {component.name} correction; "
+                "continuing with zero correction."
             )
-            lookup_image = img_out
-            if not component_detected:
-                self.get_logger().warning(
-                    f"Vision did not identify {component.name}; "
-                    "proceeding without positional correction."
-                )
-            else:
-                if correction is None or len(correction) < 2:
-                    raise ValueError(
-                        f"Invalid correction vector from get_offset: {correction}"
-                    )
-                dx, dy = float(correction[0]), float(correction[1])
-        except Exception as e:
-            # Homography or detection failed; optional scalar fallback
-            self.get_logger().warning(
-                f"get_offset (homography-based) failed for {component.name} "
-                f"at Drop step ({e}); falling back to get_offset_simple."
-            )
-            try:
-                dx, dy = self.auto_correction.get_offset_simple(img)
-            except Exception as e2:
-                self.get_logger().error(
-                    f"get_offset_simple also failed ({e2}); "
-                    "continuing with zero correction."
-                )
-                dx = dy = 0.0
             component_detected = False
-            lookup_image = img
+            lookup_image = None
+        else:
+            try:
+                img_out, correction, component_detected = self.auto_correction.get_offset(
+                    img, component=component, state=AssemblySteps.Drop
+                )
+                lookup_image = img_out
+                if not component_detected:
+                    self.get_logger().warning(
+                        f"Vision did not identify {component.name}; "
+                        "proceeding without positional correction."
+                    )
+                else:
+                    if correction is None or len(correction) < 2:
+                        raise ValueError(
+                            f"Invalid correction vector from get_offset: {correction}"
+                        )
+                    dx, dy = float(correction[0]), float(correction[1])
+            except Exception as e:
+                # Homography or detection failed; optional scalar fallback
+                self.get_logger().warning(
+                    f"get_offset (homography-based) failed for {component.name} "
+                    f"at Drop step ({e}); falling back to get_offset_simple."
+                )
+                try:
+                    dx, dy = self.auto_correction.get_offset_simple(img)
+                except Exception as e2:
+                    self.get_logger().error(
+                        f"get_offset_simple also failed ({e2}); "
+                        "continuing with zero correction."
+                    )
+                    dx = dy = 0.0
+                component_detected = False
+                lookup_image = img
 
         # Apply stricter limits for the separator to avoid collision with the crimper robot
         if component == Components.Separator:
@@ -1472,11 +1482,14 @@ def assembly_robot_command_loop(
             # Take a photo of the selected tray
             component_name = input(component_prompt)
             image = robot.take_a_tray_photo(component_name)
-            cur_time = datetime.now().strftime("%Y-%m-%d-%H-%M:%S")
-            image_file = str(
-                Path(image_path) / f"ArmCam-{component_name}-{cur_time}.jpg"
-            )
-            cv2.imwrite(image_file, image)
+            if image is not None:
+                cur_time = datetime.now().strftime("%Y-%m-%d-%H-%M:%S")
+                image_file = str(
+                    Path(image_path) / f"ArmCam-{component_name}-{cur_time}.jpg"
+                )
+                cv2.imwrite(image_file, image)
+            else:
+                print("ERROR: Failed to capture tray photo. Continuing without saving.")
         elif input_str == "M":
             # Move the component to the assembly post
             results = get_component_location_from_user(robot, component_prompt)
@@ -1581,12 +1594,15 @@ def assembly_robot_command_loop(
                 railpos, grabpos[index], is_grab=True, component_name=component_name
             )
             image = robot.take_a_look_up_photo()
-            cur_time = datetime.now().strftime("$Y-%m-%d-%H-%M:%S")
-            image_file = str(
-                Path(image_path) / f"Lookup-{component_name}-{cur_time}.jpg"
-            )
-            print(f"writing image to {image_file}")
-            cv2.imwrite(image_file, image)
+            if image is not None:
+                cur_time = datetime.now().strftime("%Y-%m-%d-%H-%M:%S")
+                image_file = str(
+                    Path(image_path) / f"Lookup-{component_name}-{cur_time}.jpg"
+                )
+                print(f"writing image to {image_file}")
+                cv2.imwrite(image_file, image)
+            else:
+                print("ERROR: Failed to capture lookup image. Continuing without saving.")
             robot.rail_meca500.move_home(tool=RobotTool.SUCTION)
             robot.grab_component(
                 railpos, grabpos[index], is_grab=False, component_name=component_name
