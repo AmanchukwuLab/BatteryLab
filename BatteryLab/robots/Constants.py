@@ -259,7 +259,7 @@ class AutoCorrectionConfig:
             diam=15.5,
             ksize=5,
             minDist=150,
-            param1=150,
+            param1=100,
             param2=40,
             minR=20,
             maxR=80,

@@ -7,6 +7,34 @@ import yaml
 from pathlib import Path
 from typing import List
 import time
+import sys
+import termios
+import tty
+
+
+def read_keypress() -> str:
+    """Read one keypress, including terminal arrow escape sequences."""
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        key = sys.stdin.read(1)
+        if key == "\x1b":
+            next_char = sys.stdin.read(1)
+            if next_char == "[":
+                arrow = sys.stdin.read(1)
+                if arrow == "A":
+                    return "UP"
+                if arrow == "B":
+                    return "DOWN"
+                if arrow == "C":
+                    return "RIGHT"
+                if arrow == "D":
+                    return "LEFT"
+            return "ESC"
+        return key
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 class MG400:
@@ -56,6 +84,158 @@ class MG400:
         self.liquid_n = None
         self.tip_m = None
         self.tip_n = None
+
+    def _save_tip_corner_xy_updates(self, corner_xy_updates: dict):
+        with open(self.position_file) as f:
+            config = yaml.safe_load(f) or {}
+
+        tipcase = config.setdefault("TipCase", {})
+
+        for corner_name, xy in corner_xy_updates.items():
+            if corner_name not in tipcase:
+                continue
+            for level_name in ("up", "down"):
+                pose = tipcase[corner_name][level_name]
+                pose[0] = float(xy[0])
+                pose[1] = float(xy[1])
+
+        # Corner-based reteach is now canonical; clear legacy full-grid overrides.
+        tipcase.pop("xy_positions_override", None)
+        tipcase.pop("up_positions_override", None)
+
+        with open(self.position_file, "w") as f:
+            yaml.safe_dump(config, f, sort_keys=False)
+
+        self.logger.info(
+            f"Saved tip corner XY updates ({list(corner_xy_updates.keys())}) to {self.position_file}"
+        )
+
+    def manual_adjust_tip_up_positions(self):
+        with open(self.position_file) as f:
+            config = yaml.safe_load(f) or {}
+
+        tipcase = config.get("TipCase", {})
+        corner_order = ["bottom_left", "bottom_right", "top_left", "top_right"]
+        if any(corner_name not in tipcase for corner_name in corner_order):
+            self.logger.error(
+                "TipCase corner definitions are missing in the position file."
+            )
+            return
+
+        min_step = 0.05
+        max_step = 5.0
+        step_size = 0.5
+
+        print("Tip-case corner up-position adjustment mode started.")
+        print(
+            "Controls: arrow keys move XY, +(or =) doubles step, -(or _) halves step, "
+            "p prints current pose, s saves this position and continues, "
+            "k keeps original and continues, q quits."
+        )
+        print("Adjusted XY is applied to both up and down corner poses.")
+
+        original_corner_xy = {
+            corner_name: [
+                float(tipcase[corner_name]["up"][0]),
+                float(tipcase[corner_name]["up"][1]),
+            ]
+            for corner_name in corner_order
+        }
+        updated_corner_xy = {
+            key: value.copy() for key, value in original_corner_xy.items()
+        }
+
+        for corner_name in corner_order:
+            current_pose = [float(v) for v in tipcase[corner_name]["up"]]
+
+            print(
+                f"\nAdjusting tip corner '{corner_name}' with step {step_size:.3f}"
+            )
+            self.movectl.MovJ(*current_pose)
+            self.movectl.Sync()
+
+            while True:
+                key = read_keypress()
+                if key in ("q", "Q"):
+                    stop_choice = (
+                        input(
+                            "Quit adjustment mode. Save accepted corner updates so far? (y/n, default y): "
+                        )
+                        .strip()
+                        .lower()
+                    )
+                    if stop_choice in ("", "y", "yes"):
+                        self._save_tip_corner_xy_updates(updated_corner_xy)
+                        self.parse_position_file()
+                    else:
+                        print("Discarded changes from this session.")
+                    self.move_home()
+                    return
+                if key in ("s", "S"):
+                    updated_corner_xy[corner_name] = [
+                        float(current_pose[0]),
+                        float(current_pose[1]),
+                    ]
+                    print(
+                        f"Saved updated corner '{corner_name}': "
+                        f"x={current_pose[0]:.3f}, y={current_pose[1]:.3f} "
+                        f"(applied to both up and down poses)"
+                    )
+                    break
+                if key in ("k", "K"):
+                    original_xy = original_corner_xy[corner_name]
+                    current_pose[0] = float(original_xy[0])
+                    current_pose[1] = float(original_xy[1])
+                    updated_corner_xy[corner_name] = original_xy.copy()
+                    print(f"Kept original pose for corner '{corner_name}'.")
+                    break
+                if key in ("+", "="):
+                    step_size = min(max_step, step_size * 2.0)
+                    print(f"Step size increased to {step_size:.3f}")
+                    continue
+                if key in ("-", "_"):
+                    step_size = max(min_step, step_size / 2.0)
+                    print(f"Step size decreased to {step_size:.3f}")
+                    continue
+                if key in ("p", "P"):
+                    print(
+                        f"Current pose ({corner_name}): "
+                        f"x={current_pose[0]:.3f}, y={current_pose[1]:.3f}, "
+                        f"z={current_pose[2]:.3f}, r={current_pose[3]:.3f}, step={step_size:.3f}"
+                    )
+                    continue
+
+                moved = False
+                if key == "UP":
+                    current_pose[0] -= step_size
+                    moved = True
+                elif key == "DOWN":
+                    current_pose[0] += step_size
+                    moved = True
+                elif key == "RIGHT":
+                    current_pose[1] += step_size
+                    moved = True
+                elif key == "LEFT":
+                    current_pose[1] -= step_size
+                    moved = True
+
+                if moved:
+                    self.movectl.MovL(*current_pose)
+                    self.movectl.Sync()
+
+        final_choice = (
+            input(
+                "Finished all corner positions. Write updated positions to storage file? (y/n, default y): "
+            )
+            .strip()
+            .lower()
+        )
+        if final_choice in ("", "y", "yes"):
+            self._save_tip_corner_xy_updates(updated_corner_xy)
+            self.parse_position_file()
+        else:
+            print("Discarded changes from this session.")
+        self.move_home()
 
     def intialize_robot(self) -> bool:
         try:
@@ -230,6 +410,44 @@ class MG400:
             "mg400-tip-pose-down",
         )
 
+        xy_override = tipcase.get("xy_positions_override", None)
+        if xy_override is not None:
+            expected_len = m * n
+            if len(xy_override) == expected_len:
+                for i, xy in enumerate(xy_override):
+                    if len(xy) < 2:
+                        continue
+                    x_val = float(xy[0])
+                    y_val = float(xy[1])
+                    self.tip_poses_up[i][0] = x_val
+                    self.tip_poses_up[i][1] = y_val
+                    self.tip_poses_down[i][0] = x_val
+                    self.tip_poses_down[i][1] = y_val
+                self.logger.info(
+                    f"Loaded {expected_len} tip XY overrides from {self.position_file}."
+                )
+            else:
+                self.logger.warning(
+                    f"Ignoring TipCase.xy_positions_override: expected {expected_len} poses, got {len(xy_override)}."
+                )
+        else:
+            # Backward compatibility with old files that only stored up poses.
+            up_override = tipcase.get("up_positions_override", None)
+            if up_override is not None:
+                expected_len = m * n
+                if len(up_override) == expected_len:
+                    self.tip_poses_up = [[float(v) for v in p] for p in up_override]
+                    for i in range(expected_len):
+                        self.tip_poses_down[i][0] = float(self.tip_poses_up[i][0])
+                        self.tip_poses_down[i][1] = float(self.tip_poses_up[i][1])
+                    self.logger.info(
+                        f"Loaded legacy tip up-position overrides from {self.position_file} and propagated XY to down poses."
+                    )
+                else:
+                    self.logger.warning(
+                        f"Ignoring TipCase.up_positions_override: expected {expected_len} poses, got {len(up_override)}."
+                    )
+
         liquid = config["Liquid"]
         m = int(liquid["m"])
         n = int(liquid["n"])
@@ -289,6 +507,7 @@ def main_loop(mg400: MG400):
 [G] to get tip at tipcase case(x,y), [A] to get liquid at liquid case (x,y) with volume, [D] to return tip to tipcase (x,y),
 [R] to return liquid to liquidcase(x,y), [J] to dispense liquid with volume to the post.
 [Z] to enter manual positioning mode.
+[T] to manually adjust tip-case corner XY positions (applies to up/down corners).
 :> 
 """
     try:
@@ -298,6 +517,8 @@ def main_loop(mg400: MG400):
                 break
             elif input_str == "Z":
                 manual_position_loop(mg400)
+            elif input_str == "T":
+                mg400.manual_adjust_tip_up_positions()
             elif input_str == "0":
                 mg400.move_home()
             elif input_str == "M":

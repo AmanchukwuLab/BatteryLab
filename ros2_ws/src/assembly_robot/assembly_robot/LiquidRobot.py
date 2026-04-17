@@ -69,6 +69,8 @@ def liquid_robot_command_loop(liquidRobot: LiquidRobot):
 [J] to dispense liquid with volume to the post.
 [S] to move to the assembly post.
 [Z] to enter manual positioning mode.
+[T] to manually adjust tip-case corner XY positions (applies to up and down corners).
+[P] to reload MG400 positions from the config file.
 :> 
 """
     try:
@@ -78,6 +80,8 @@ def liquid_robot_command_loop(liquidRobot: LiquidRobot):
                 break
             elif input_str == "Z":
                 manual_position_loop(liquidRobot)
+            elif input_str == "T":
+                liquidRobot.MG400.manual_adjust_tip_up_positions()
             elif input_str == "0":
                 liquidRobot.MG400.move_home()
             elif input_str == "M":
@@ -114,6 +118,9 @@ def liquid_robot_command_loop(liquidRobot: LiquidRobot):
                 y = int(input("Please input liquid bottle index y:").strip())
                 volume = int(input("Please input volume:").strip())
                 liquidRobot.MG400.get_liquid(x, y, volume)
+            elif input_str == "P":
+                liquidRobot.MG400.parse_position_file()
+                print("Reloaded MG400 positions from the configuration file.")
             else:
                 print("Invalid input. Please enter a valid option.")
     except KeyboardInterrupt:

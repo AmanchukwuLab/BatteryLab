@@ -226,7 +226,7 @@ class AssemblyRobot(Node):
         while rclpy.ok():
             rclpy.spin_once(self.zaber_rail)
             self.get_logger().info("waiting for the moving request to complete...")
-            time.sleep(1)
+            time.sleep(0.1) # originally 1.0
             if future.done():
                 try:
                     response = future.result()
@@ -315,8 +315,7 @@ class AssemblyRobot(Node):
                 dx = max(-separator_dx_dy_max, min(separator_dx_dy_max, dx))
                 dy = max(-separator_dx_dy_max, min(separator_dx_dy_max, dy))
 
-        # Proceed placing component
-        self.rail_meca500.move_home()
+        # Get helper information for placing component
         current_tool = self.rail_meca500.get_current_tool()
         rail_pos = self.assemblyRobotConstants.POST_RAIL_LOCATION
         if current_tool == RobotTool.SUCTION:
@@ -329,10 +328,6 @@ class AssemblyRobot(Node):
         else:
             self.get_logger().error("The current tool is invalid for a snapshot")
             return
-
-        self.move_zaber_rail(rail_pos)
-        self.rail_meca500.robot.MoveJoints(*mid_point_joints)
-        self.rail_meca500.robot.WaitIdle(30)
 
         # Adjust robot_pos (pedestal drop coords) based on vision info
         dx = max(-self.D_LIMIT, min(self.D_LIMIT, dx))
@@ -352,9 +347,18 @@ class AssemblyRobot(Node):
         )
         robot_pos[0] += dx
         robot_pos[1] += dy
-        self.rail_meca500.pick_place(
+
+        # Move arm to pedestal drop position (rail not moved yet)
+        self.rail_meca500.pick_place_part1(
             robot_pos, is_grab=False, premove_callback=premove_callback
         )
+        # Move to correct rail position
+        self.move_zaber_rail(rail_pos)
+        # Finish placing component on pedestal
+        self.rail_meca500.pick_place_part2(
+            robot_pos, is_grab=False, premove_callback=premove_callback
+        )
+        
         return {
             "dx": dx,
             "dy": dy,
@@ -1506,7 +1510,9 @@ def assembly_robot_command_loop(
                 robot.grab_component(
                     railpos, grabpos[index], is_grab=True, component_name=component_name
                 )
-                robot.drop_current_component_to_assembly_post()
+                robot.drop_current_component_to_assembly_post(
+                    component=Components[component_name]
+                )
             else:
                 print("The index you give is not valid for the robot to grab!")
                 continue

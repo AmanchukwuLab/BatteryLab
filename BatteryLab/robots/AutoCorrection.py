@@ -29,9 +29,31 @@ class AutoCorrection:
         self.dir_name = Path(os.path.dirname(__file__)) / "Calibration"
         if not self.dir_name.exists():
             os.makedirs(self.dir_name)
+        self.failed_detection_dir = self.dir_name / "DetectionFailures"
+        self.failed_detection_dir.mkdir(parents=True, exist_ok=True)
         self.vision_params_path = self.dir_name / "vision_params.json"
         self.vision_params = self.get_vision_params(silent=silent)
         pass
+
+    def _save_failed_detection_image(
+        self, img, component: Components, state: AssemblySteps, reason: str
+    ):
+        if img is None:
+            return
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = (
+            f"{component.name}_{state.name}_{reason}_{timestamp}.png"
+        )
+        output_path = self.failed_detection_dir / filename
+        try:
+            cv2.imwrite(str(output_path), img)
+            self.logger.info(
+                f"Saved failed detection image to {output_path}"
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to save failed detection image to {output_path}: {e}"
+            )
 
     def detect_object_center(self, img, object_config: dict):
         # Image preprocessing
@@ -265,6 +287,9 @@ class AutoCorrection:
             )
             return img_output, correction, True
         else:
+            self._save_failed_detection_image(
+                img, component, state, "component_not_detected"
+            )
             # no circles found, try detecting suction cup with calibrated config
             try:
                 detected_suction = self._detect_suction_with_calib_config(img)
@@ -275,11 +300,18 @@ class AutoCorrection:
                 detected_suction = []
 
             if detected_suction:
-                self.logger.info(f"Object {component.name} failed being grabbed!")
+                self.logger.info(
+                    f"Object {component.name} failed being grabbed. "
+                    f"Failure image saved under {self.failed_detection_dir}."
+                )
                 return img, np.zeros(6, dtype=np.float32), False
             else:
+                self._save_failed_detection_image(
+                    img, component, state, "component_and_suction_not_detected"
+                )
                 self.logger.info(
-                    f"Object {component.name} failed being detected."
+                    f"Object {component.name} failed being detected. "
+                    f"Failure images saved under {self.failed_detection_dir}."
                 )
                 return img, np.zeros(6, dtype=np.float32), False
 

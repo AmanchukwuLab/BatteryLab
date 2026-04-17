@@ -120,13 +120,14 @@ class RailMeca500(Meca500):
         )
         self.robot.WaitIdle()
 
-    def pick_place(
-        self,
+    def pick_place_part1(
+        self, 
         grab_pos,
-        is_grab=True,
+        is_grab=True, 
         premove_callback: Optional[Callable[[], None]] = None,
-        home_after: bool = True,
+        home_after: bool = True
     ):
+        """Moves to initial position for picking or placing a component. """
         self.logger.info(f"Starting picking component at {grab_pos}")
         self.robot.SetJointVel(self.RobotConstants.J_VEL)
         self.robot.MovePose(
@@ -137,8 +138,16 @@ class RailMeca500(Meca500):
             grab_pos[4],
             grab_pos[5],
         )
-        # Linearly moving down to grab the component and go back
         self.robot.Delay(0.5)
+
+    def pick_place_part2(
+        self,
+        grab_pos,
+        is_grab=True,
+        premove_callback: Optional[Callable[[], None]] = None,
+        home_after: bool = True,
+    ):
+        # Linearly moving down to grab the component and go back
         self.robot.SetCartLinVel(self.RobotConstants.L_VEL)
         if is_grab:
             self.robot.MoveLin(*grab_pos)
@@ -177,6 +186,16 @@ class RailMeca500(Meca500):
             self.robot.SetCartLinVel(self.RobotConstants.L_VEL)
             self.move_home(tool=self.tool)
             self.robot.WaitIdle()
+        
+    def pick_place(
+        self,
+        grab_pos,
+        is_grab=True,
+        premove_callback: Optional[Callable[[], None]] = None,
+        home_after: bool = True,
+    ):
+        self.pick_place_part1(grab_pos, is_grab, premove_callback, home_after)
+        self.pick_place_part2(grab_pos, is_grab, premove_callback, home_after)
 
     def move_to_pick_position(self, grab_pos, level: float = 1):
         if level > 1 or level < 0:
