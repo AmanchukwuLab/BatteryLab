@@ -73,7 +73,36 @@ Alternatively, you can run the general command-line app to run the whole assembl
 ros2 run assembly_robot app
 ```
 
-We plan to develop a web-based UI for easier control with a graphical interface.
+Within the app, you can:
+- Press **[B]atch** to load a JSON recipes file and assemble a series of cells in sequence. The app will prompt for the file path.
+- Press **[O]ne** to assemble a single battery.
+
+Each assembled battery's record includes the recipe name and payload (stored as JSON) so the cell is linked to its formulation.
+
+Example recipe file (for the [B]atch option):
+
+```json
+[
+  {
+    "recipe_name": "baseline_cell_01",
+    "electrolyte_volume_ul": 50,
+    "ingredients": [
+      {"solution_name": "LiPF6_1M", "volume_ul": 20},
+      {"solution_name": "EC_DMC_1to1", "volume_ul": 30}
+    ]
+  },
+  {
+    "recipe_name": "variant_cell_02",
+    "electrolyte_volume_ul": 50,
+    "ingredients": [
+      {"solution_name": "LiPF6_1M", "volume_ul": 25},
+      {"solution_name": "EC_DMC_1to1", "volume_ul": 25}
+    ]
+  }
+]
+```
+
+We may eventually develop a web-based UI for easier control with a graphical interface.
 
 ## Hardware Requirements
 

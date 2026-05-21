@@ -39,3 +39,10 @@ def save_inventory_state(inventory: Inventory, path: str | Path = DEFAULT_STATE_
     with state_path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
     return state_path
+
+def show_save_location(inventory: Inventory, path: str | Path = DEFAULT_STATE_PATH) -> Path:
+    """Show the location where the inventory state would be saved without actually saving."""
+
+    state_path = Path(path)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    return state_path

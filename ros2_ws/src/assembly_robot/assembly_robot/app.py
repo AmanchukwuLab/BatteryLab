@@ -1,31 +1,243 @@
+import argparse
+import csv
+import json
+import re
+import statistics
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Sequence
+
+import cv2
+import rclpy
+from rclpy.node import Node
+
 from .AssemblyRobot import AssemblyRobot, assembly_robot_command_loop
 from .CrimperRobot import CrimperRobot, crimper_robot_command_loop
 from .LiquidRobot import LiquidRobot, liquid_robot_command_loop
-from BatteryLab.robots.Constants import Components
 from BatteryLab.electrolyte_planner import (
     DEFAULT_STATE_PATH,
     clear_vial,
     load_inventory_state,
     print_vial_statuses,
     save_inventory_state,
+    show_save_location,
     set_vial_contents,
+    evaluate_formulation,
+    evaluate_formulation_with_vials,
+    Inventory,
 )
-
-import csv
-import re
-import statistics
-import rclpy
-from rclpy.node import Node
-from pathlib import Path
-from datetime import datetime
-from typing import Optional
-import cv2
+from BatteryLab.robots.Constants import Components
 
 
 def _component_slug(component_name: str) -> str:
     component_name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", component_name)
     component_name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", component_name)
     return component_name.lower()
+
+
+def _load_recipes_file(recipe_path: Path) -> list[dict]:
+    with recipe_path.open("r", encoding="utf-8") as handle:
+        raw_payload = json.load(handle)
+
+    if isinstance(raw_payload, dict):
+        if "recipes" in raw_payload:
+            raw_payload = raw_payload["recipes"]
+        elif "cells" in raw_payload:
+            raw_payload = raw_payload["cells"]
+        else:
+            raw_payload = [raw_payload]
+
+    if not isinstance(raw_payload, list) or not raw_payload:
+        raise ValueError("recipes file must contain a non-empty list of recipe objects")
+
+    normalized_recipes: list[dict] = []
+    for index, recipe in enumerate(raw_payload, start=1):
+        if not isinstance(recipe, dict):
+            raise ValueError(f"recipe entry {index} must be a JSON object")
+        normalized_recipes.append(recipe)
+
+    return normalized_recipes
+
+
+def _assess_batch_requirements(recipes: list[dict], inventory: Inventory) -> tuple[dict, dict]:
+    """Return (required_by_solution, deficits) for a list of recipes against current inventory.
+
+    required_by_solution maps solution_name -> total required uL across all recipes.
+    deficits maps solution_name -> deficit uL (required - available) if positive.
+    """
+    required_by_solution: dict[str, float] = {}
+
+    for recipe in recipes:
+        ingredients = recipe.get("ingredients") or []
+        if not ingredients:
+            continue
+
+        is_weight = ingredients[0].get("weight_percent") is not None
+        if not is_weight:
+            for ing in ingredients:
+                name = ing.get("solution_name")
+                vol = float(ing.get("volume_ul", 0.0) or 0.0)
+                if not name:
+                    raise ValueError("Ingredient missing solution_name")
+                required_by_solution[name] = required_by_solution.get(name, 0.0) + vol
+            continue
+
+        # weight-percent recipe: convert to volumes using inventory densities
+        target_total_volume_ul = recipe.get("target_total_volume_ul") or recipe.get("electrolyte_volume_ul")
+        if target_total_volume_ul is None:
+            raise ValueError(
+                f"Weight-percent recipe '{recipe.get('recipe_name')}' missing target_total_volume_ul"
+            )
+        target_volume_ml = float(target_total_volume_ul) / 1000.0
+
+        weight_over_density = []
+        for ing in ingredients:
+            sol = ing.get("solution_name")
+            wt = float(ing.get("weight_percent") or 0.0) / 100.0
+            if sol is None:
+                raise ValueError("Ingredient missing solution_name")
+            # get density from inventory (may raise if missing)
+            density = inventory.density_for_solution(sol)
+            weight_over_density.append((sol, wt / density))
+
+        denominator = sum(item[1] for item in weight_over_density)
+        if denominator <= 0:
+            raise ValueError("Invalid weight_percent/density combination for conversion")
+
+        for sol, term in weight_over_density:
+            vol_ul = (target_volume_ml * term / denominator) * 1000.0
+            required_by_solution[sol] = required_by_solution.get(sol, 0.0) + vol_ul
+
+    # Compare to available inventory
+    deficits: dict[str, float] = {}
+    for sol, req in required_by_solution.items():
+        avail = inventory.available_volume(sol)
+        if avail < req:
+            deficits[sol] = req - avail
+
+    return required_by_solution, deficits
+
+
+def _simulate_recipe_execution(recipe: dict, inventory: Inventory) -> None:
+    """Print a simulated sequence of liquid-robot actions for a recipe without moving hardware.
+
+    Uses `evaluate_formulation` to generate instructions and prints human-friendly
+    messages that mirror what the MG400 would do (tip pickup, aspirate from vial,
+    dispense to assembly post, return tip).
+    """
+    name = recipe.get("recipe_name", "<unnamed>")
+    print(f"\n--- Simulation for recipe: {name} ---")
+    try:
+        plan = evaluate_formulation(inventory, recipe)
+    except Exception as e:
+        print(f"Failed to evaluate recipe '{name}': {e}")
+        return
+
+    if not plan.get("feasible", False):
+        print(f"Recipe '{name}' is NOT feasible. Issues: {plan.get('issues', [])}")
+        return
+
+    instructions = plan.get("instructions", [])
+    if not instructions:
+        # Fall back to a single-volume action if planner produced no instructions
+        vol = recipe.get("electrolyte_volume_ul") or recipe.get("target_total_volume_ul") or 0
+        print(f"Simulate: Acquire tip (simulated)")
+        print(f"Simulate: Dispense {float(vol):.1f} uL to assembly post (single-vessel fallback)")
+        print(f"Simulate: Return/drop tip (simulated)")
+        return
+
+    print("Simulated pipetting instructions:")
+    print(" - Acquire tip (simulated)")
+    for instr in instructions:
+        step = instr.get("step_index")
+        name_ing = instr.get("ingredient_name")
+        sx = instr.get("source_x_ind")
+        sy = instr.get("source_y_ind")
+        src = instr.get("source_solution")
+        vol = float(instr.get("volume_ul", 0.0) or 0.0)
+        print(
+            f"   Step {step}: move to vial ({sx},{sy}) containing '{src}' -> "
+            f"aspirate {vol:.1f} uL of '{name_ing}' (simulated)"
+        )
+        print(f"            move to assembly post -> dispense {vol:.1f} uL (simulated)")
+        print(f"            return tip to waste/stand (simulated for step {step})")
+    print(" - Drop tip (simulated)")
+    print(f"--- End simulation for recipe: {name} ---\n")
+
+
+def _simulate_recipe_execution_with_movements(recipe: dict, inventory: Inventory, liquid_robot) -> None:
+    """Simulate the recipe while commanding only MG400 movements (no aspirate/dispense).
+
+    Behavior:
+    - Move the MG400 to acquire the correct tip (down then up) but do NOT call the aspirate
+      method used to physically pick a tip.
+    - Move (without descending) to each source vial location for the planned instructions.
+    - Return the tip to the tip rack (movement only, no eject).
+    """
+    #TODO: come back and proofread this
+    name = recipe.get("recipe_name", "<unnamed>")
+    print(f"\n--- Movement-simulation for recipe: {name} ---")
+    try:
+        plan = evaluate_formulation(inventory, recipe)
+    except Exception as e:
+        print(f"Failed to evaluate recipe '{name}': {e}")
+        return
+
+    if not plan.get("feasible", False):
+        print(f"Recipe '{name}' is NOT feasible. Issues: {plan.get('issues', [])}")
+        return
+
+    instructions = plan.get("instructions", [])
+    mg = liquid_robot.MG400
+    tip_x, tip_y = 0, 0
+
+    print("Simulating: Acquire tip (movement only)")
+    try:
+        # Move down to tip 
+        mg.get_tip(tip_x, tip_y)
+    except Exception as e:
+        print(f"Movement to tip failed (simulated): {e}")
+
+    if not instructions:
+        vol = recipe.get("electrolyte_volume_ul") or recipe.get("target_total_volume_ul") or 0
+        print(f"Simulate movement: move to default liquid location (movement only)")
+        try:
+            mg.move_to_liquid(0, 0, level=1)
+        except Exception as e:
+            print(f"Movement to default liquid failed (simulated): {e}")
+        print(f"Simulated: would dispense {float(vol):.1f} uL to assembly post (no action)")
+        print("Simulating: Return tip (movement only)")
+        try:
+            mg.move_to_tip_case(tip_x, tip_y, level=0.4)
+            mg.move_home()
+        except Exception:
+            pass
+        print(f"--- End movement-simulation for recipe: {name} ---\n")
+        return
+
+    print("Simulated pipetting movements:")
+    for instr in instructions:
+        step = instr.get("step_index")
+        sx = int(instr.get("source_x_ind", 0))
+        sy = int(instr.get("source_y_ind", 0))
+        vol = float(instr.get("volume_ul", 0.0) or 0.0)
+        print(f"  Step {step}: move to vial ({sx},{sy}) containing '{instr.get('source_solution')}' (movement only)")
+        try:
+            # Move to vial up-position only so we do not descend into liquid
+            mg.move_to_liquid(sx, sy, level=1)
+        except Exception as e:
+            print(f"    Movement to vial failed (simulated): {e}")
+        print(f"           would aspirate {vol:.1f} uL (no action), then move to assembly post (no action)")
+
+    print("Simulating: Return tip to tip rack (movement only)")
+    try:
+        mg.move_to_tip_case(tip_x, tip_y, level=0.4)
+        mg.move_home()
+    except Exception:
+        pass
+
+    print(f"--- End movement-simulation for recipe: {name} ---\n")
 
 
 class BatterySessionTracker:
@@ -60,6 +272,11 @@ class BatterySessionTracker:
             "battery_start_time",
             "battery_end_time",
             "battery_status",
+            "recipe_source_path",
+            "recipe_sequence_index",
+            "recipe_name",
+            "recipe_total_volume_ul",
+            "recipe_payload_json",
         ]
         for component in self.component_order:
             slug = _component_slug(component.name)
@@ -75,7 +292,12 @@ class BatterySessionTracker:
             self._component_adjust_history[slug] = {"dx": [], "dy": []}
         self._flush()
 
-    def start_battery(self):
+    def start_battery(
+        self,
+        recipe: Optional[dict] = None,
+        recipe_index: Optional[int] = None,
+        recipe_source_path: Optional[str] = None,
+    ):
         self._battery_index += 1
         record = {
             "battery_id": self._battery_index,
@@ -83,7 +305,20 @@ class BatterySessionTracker:
             "battery_start_time": datetime.now().isoformat(timespec="seconds"),
             "battery_end_time": "",
             "battery_status": "running",
+            "recipe_source_path": recipe_source_path or "",
+            "recipe_sequence_index": "" if recipe_index is None else str(recipe_index),
+            "recipe_name": "",
+            "recipe_total_volume_ul": "",
+            "recipe_payload_json": "",
         }
+        if recipe is not None:
+            record["recipe_name"] = str(recipe.get("recipe_name", "")).strip()
+            recipe_total_volume = recipe.get("electrolyte_volume_ul")
+            if recipe_total_volume is None:
+                recipe_total_volume = recipe.get("target_total_volume_ul")
+            if recipe_total_volume is not None:
+                record["recipe_total_volume_ul"] = str(recipe_total_volume)
+            record["recipe_payload_json"] = json.dumps(recipe, sort_keys=True)
         for component in self.component_order:
             slug = _component_slug(component.name)
             record[f"{slug}_dx"] = ""
@@ -209,6 +444,58 @@ class AutoBatteryLab(Node):
         self.crimper_robot.initialize_and_home_robots()
         logger.info("Finished intializing the Auto Battery Lab")
 
+    @staticmethod
+    def _electrolyte_volume_for_recipe(recipe: Optional[dict]) -> float:
+        if recipe is None:
+            return 50.0
+
+        for key in ("electrolyte_volume_ul", "target_total_volume_ul"):
+            value = recipe.get(key)
+            if value is not None:
+                volume_ul = float(value)
+                if volume_ul <= 0:
+                    raise ValueError("Recipe electrolyte volume must be greater than zero.")
+                return volume_ul
+
+        return 50.0
+
+    def assemble_batteries_in_series(
+        self,
+        recipes: Sequence[dict],
+        recipe_source_path: Optional[str] = None,
+    ):
+        if not recipes:
+            raise ValueError("recipes file did not contain any cells to assemble")
+
+        logger = self.get_logger()
+        total_recipes = len(recipes)
+        for recipe_index, recipe in enumerate(recipes, start=1):
+            recipe_name = str(recipe.get("recipe_name", f"recipe_{recipe_index}"))
+            logger.info(
+                f"Preparing to assemble battery {recipe_index}/{total_recipes} for recipe '{recipe_name}'"
+            )
+
+            # Reload inventory to reflect any changes from prior batch items
+            inventory = load_inventory_state()
+            try:
+                feas = evaluate_formulation(inventory, recipe)
+            except Exception as e:
+                logger.error(f"Failed to evaluate recipe '{recipe_name}': {e}")
+                continue
+
+            if not feas.get("feasible", False):
+                logger.error(
+                    f"Skipping recipe '{recipe_name}': formulation not feasible: {feas.get('issues', [])}"
+                )
+                continue
+
+            logger.info(f"Recipe '{recipe_name}' feasible — beginning assembly")
+            self.assemble_a_battery(
+                recipe=recipe,
+                recipe_index=recipe_index,
+                recipe_source_path=recipe_source_path,
+            )
+
     def put_a_component_on_assembly_post(
         self,
         component: Components,
@@ -253,8 +540,17 @@ class AutoBatteryLab(Node):
         if premove_callback is not None:
             self.crimper_robot.release_separator()  # open gripper and move back home
 
-    def assemble_a_battery(self):
-        battery_record = self.session_tracker.start_battery()
+    def assemble_a_battery(
+        self,
+        recipe: Optional[dict] = None,
+        recipe_index: Optional[int] = None,
+        recipe_source_path: Optional[str] = None,
+    ):
+        battery_record = self.session_tracker.start_battery(
+            recipe=recipe,
+            recipe_index=recipe_index,
+            recipe_source_path=recipe_source_path,
+        )
         # Prepare all the robots and home them
         try:
             rail_pos = self.assembly_robot.get_rail_pos()
@@ -299,19 +595,64 @@ class AutoBatteryLab(Node):
                 raise RuntimeError(
                     "The current linear rail pos cannot be cleared! Check the status!"
                 )
-            # 6.(2) Add electrolyte
+            # 6.(2) Add electrolyte using planner instructions when recipe provided
             self.liquid_robot.MG400.move_home()
-            # TODO: change tip for different electrolytes
             tip_x, tip_y = 0, 0
-            liquid_x, liquid_y = 0, 0
-            volume_to_get, volume_for_a_battery = 50, 50
-            self.liquid_robot.MG400.get_tip(tip_x, tip_y)
-            # TODO: change liquid bottle location for different electrolytes
-            self.liquid_robot.MG400.get_liquid(liquid_x, liquid_y, volume_to_get)
-            self.liquid_robot.MG400.add_liquid_to_post(volume_for_a_battery)
-            self.liquid_robot.MG400.return_liquid(liquid_x, liquid_y)
-            self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
-            self.liquid_robot.MG400.move_home()
+            try:
+                if recipe is None or not recipe.get("ingredients"):
+                    # Fall back to single-volume dispense
+                    volume_to_get = self._electrolyte_volume_for_recipe(recipe)
+                    self.liquid_robot.MG400.get_tip(tip_x, tip_y)
+                    # default single-bottle coordinates
+                    liquid_x, liquid_y = 0, 0
+                    self.liquid_robot.MG400.get_liquid(liquid_x, liquid_y, volume_to_get)
+                    self.liquid_robot.MG400.add_liquid_to_post(volume_to_get)
+                    self.liquid_robot.MG400.return_liquid(liquid_x, liquid_y)
+                    self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
+                    self.liquid_robot.MG400.move_home()
+                else:
+                    # Use electrolyte planner to allocate from vials and update inventory
+                    inventory = load_inventory_state()
+                    plan_payload = evaluate_formulation_with_vials(inventory, recipe)
+                    if not plan_payload.get("feasible", False):
+                        issues = plan_payload.get("issues", [])
+                        self.get_logger().error(
+                            f"Formulation not feasible for recipe '{recipe.get('recipe_name')}', issues: {issues}"
+                        )
+                        self.session_tracker.finish_battery(battery_record, status="failed_feasibility")
+                        return
+
+                    instructions = plan_payload.get("instructions", [])
+                    # Acquire a tip once for the sequence
+                    self.liquid_robot.MG400.get_tip(tip_x, tip_y)
+                    for instr in instructions:
+                        sx = int(instr.get("source_x_ind", 0))
+                        sy = int(instr.get("source_y_ind", 0))
+                        vol = float(instr.get("volume_ul", 0.0))
+                        if vol <= 0:
+                            continue
+                        # Aspirate from source vial and dispense to assembly post
+                        self.liquid_robot.MG400.get_liquid(sx, sy, vol)
+                        self.liquid_robot.MG400.add_liquid_to_post(vol)
+                        # Blowout/return to source to clear the tip
+                        self.liquid_robot.MG400.return_liquid(sx, sy)
+                    self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
+                    self.liquid_robot.MG400.move_home()
+
+                    # Persist updated inventory returned by the planner
+                    updated_inv = plan_payload.get("updated_inventory")
+                    if updated_inv is not None:
+                        try:
+                            save_inventory_state(Inventory(**updated_inv))
+                        except Exception:
+                            # As a fallback, try saving the in-memory Inventory object
+                            try:
+                                save_inventory_state(inventory)
+                            except Exception as e:
+                                self.get_logger().warning(f"Failed to save updated inventory: {e}")
+            except Exception:
+                self.session_tracker.finish_battery(battery_record, status="failed")
+                raise
             # 7. Put the Anode
             self.put_a_component_on_assembly_post(
                 Components.Anode, order, battery_record=battery_record
@@ -412,6 +753,7 @@ Electrolyte Planner Menu
 [C]leaned vial (mark as empty)
 [R]eload inventory from disk
 [S]ave inventory to disk
+[P]rint the location of the inventory file on disk
 [Enter] Back to main menu
 :> """
 
@@ -419,7 +761,6 @@ Electrolyte Planner Menu
         user_input = input(prompt).strip().lower()
         if len(user_input) > 1:
             user_input = user_input[0]
-
         if user_input == "":
             break
         if user_input == "v":
@@ -510,14 +851,88 @@ Electrolyte Planner Menu
             save_inventory_state(inventory)
             print("Saved inventory to disk.")
             continue
-
+        if user_input == "p":
+            show_save_location(inventory)
+            print("Inventory file location displayed.")
+            continue
         print("The choice is not valid. Please try again.")
+
+
+def _recipes_batch_menu(batterylab: AutoBatteryLab):
+    logger = batterylab.get_logger()
+    recipes_path = input("Enter path to recipes JSON file: ").strip()
+    if not recipes_path:
+        print("Canceled.")
+        return
+    
+    try:
+        recipe_file = Path(recipes_path)
+        if not recipe_file.exists():
+            print(f"File not found: {recipe_file}")
+            return
+        recipes = _load_recipes_file(recipe_file)
+
+        # Pre-assess aggregated requirements across all recipes
+        inventory = load_inventory_state()
+        try:
+            required, deficits = _assess_batch_requirements(recipes, inventory)
+        except Exception as e:
+            print(f"Failed to assess recipes: {e}")
+            return
+
+        if required:
+            print("Aggregated chemical requirements for this batch:")
+            for sol, vol in required.items():
+                avail = inventory.available_volume(sol)
+                deficit = deficits.get(sol, 0.0)
+                status = f"DEFICIT {deficit:.1f} uL" if deficit > 0 else "OK"
+                print(f" - {sol}: required {vol:.1f} uL, available {avail:.1f} uL -> {status}")
+        else:
+            print("No ingredient-based requirements detected in recipes; proceeding with volume-only dispenses.")
+        # Offer test/dry-run and movement-simulation options
+        action = input(
+            "Choose action: [T]est recipes (simulate text), [M]ovements (simulate MG400 movements), [A]ssemble now, [C]ancel (default C): "
+        ).strip().lower()
+        if action == "t":
+            # Run text-only simulation for each recipe using a snapshot of inventory
+            for recipe in recipes:
+                _simulate_recipe_execution(recipe, inventory)
+            # After testing, ask whether to proceed
+            action = input("Proceed to assemble these recipes now? (y/n): ").strip().lower()
+            if action != "y":
+                print("Canceled after test.")
+                return
+        if action == "m":
+            # Run movement-only simulation (commands MG400 to move to tips/vials but does not aspirate)
+            for recipe in recipes:
+                _simulate_recipe_execution_with_movements(recipe, inventory, batterylab.liquid_robot)
+            action = input("Proceed to assemble these recipes now? (y/n): ").strip().lower()
+            if action != "y":
+                print("Canceled after movement-simulation.")
+                return
+        if action == "a":
+            batterylab.assemble_batteries_in_series(
+                recipes,
+                recipe_source_path=str(recipe_file.resolve()),
+            )
+        else:
+            print("Canceled.")
+        logger.info(f"Completed batch assembly of {len(recipes)} batteries.")
+    except FileNotFoundError:
+        print(f"File not found: {recipes_path}")
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON file: {e}")
+    except ValueError as e:
+        print(f"Invalid recipes file: {e}")
+    except Exception as e:
+        logger.error(f"Batch assembly failed: {e}")
+        print(f"Error: {e}")
 
 
 def command_loop(batterylab: AutoBatteryLab):
     prompt = """Press [Enter] to quit, [A]ssembly to go to assembly_robot's command list,
 [L]iquid to go to liquid_robot's command list, [C]rimper to go to crimper_robot's command list.
-[B]attery to finish assemble a battery from scratch to storage.
+[B]atch recipes file to assemble series of batteries, or [O]ne battery for single assembly.
 [E]lectrolyte planner to manage vial contents and cleaning status.
 :> """
     batterylab.assembly_robot.load_counter_config()
@@ -534,6 +949,8 @@ def command_loop(batterylab: AutoBatteryLab):
         elif user_input == "c":
             crimper_robot_command_loop(batterylab.crimper_robot)
         elif user_input == "b":
+            _recipes_batch_menu(batterylab)
+        elif user_input == "o":
             try:
                 batterylab.assemble_a_battery()
             except Exception as e:
@@ -551,9 +968,11 @@ def main():
     rclpy.init()
     batterylab = AutoBatteryLab()
 
-    command_loop(batterylab)
-    batterylab.destroy_node()
-    rclpy.shutdown()
+    try:
+        command_loop(batterylab)
+    finally:
+        batterylab.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":

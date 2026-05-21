@@ -27,7 +27,12 @@ from .reporting import (
     print_operation_update,
     print_vial_statuses,
 )
-from .storage import DEFAULT_STATE_PATH, load_inventory_state, save_inventory_state
+from .storage import (
+    DEFAULT_STATE_PATH,
+    load_inventory_state,
+    save_inventory_state,
+    show_save_location,
+)
 
 __all__ = [
     "DEFAULT_BATTERY_ELECTROLYTE_UL",
@@ -53,6 +58,7 @@ __all__ = [
     "print_operation_update",
     "print_vial_statuses",
     "save_inventory_state",
+    "show_save_location",
     "clear_vial",
     "set_vial_contents",
 ]

@@ -27,19 +27,50 @@ def format_vial_statuses(
     if not inventory.vials:
         return "No vials configured."
 
-    lines = [
-        "Vial Status",
-        "x_ind | y_ind | status | current_solution | previous_solution | remaining_uL | low_threshold_uL",
-        "-" * 88,
-    ]
-
+    rows = []
     for vial in sorted(inventory.vials, key=lambda item: (item.x_ind, item.y_ind)):
         status = _status_label(vial, empty_threshold_ul)
         current_name = vial.current_solution_name or "-"
         previous_name = vial.previous_solution_name or "-"
+        rows.append(
+            {
+                "x_ind": str(vial.x_ind),
+                "y_ind": str(vial.y_ind),
+                "status": status,
+                "current_solution": current_name,
+                "previous_solution": previous_name,
+                "remaining_uL": f"{vial.volume_ul:.1f}",
+                "low_threshold_uL": f"{vial.low_volume_threshold_ul:.1f}",
+            }
+        )
+
+    columns = [
+        ("x_ind", "x_ind"),
+        ("y_ind", "y_ind"),
+        ("status", "status"),
+        ("current_solution", "current_solution"),
+        ("previous_solution", "previous_solution"),
+        ("remaining_uL", "remaining_uL"),
+        ("low_threshold_uL", "low_threshold_uL"),
+    ]
+    widths = {
+        key: max(len(label), *(len(row[key]) for row in rows))
+        for key, label in columns
+    }
+
+    lines = [
+        "Vial Status",
+        " | ".join(
+            f"{label:<{widths[key]}}" for key, label in columns
+        ),
+        "-+-".join("-" * widths[key] for key, _ in columns),
+    ]
+
+    for row in rows:
         lines.append(
-            f"{vial.x_ind} | {vial.y_ind} | {status} | {current_name} | {previous_name} | "
-            f"{vial.volume_ul:.1f} | {vial.low_volume_threshold_ul:.1f}"
+            " | ".join(
+                f"{row[key]:<{widths[key]}}" for key, _ in columns
+            )
         )
 
     return "\n".join(lines)
