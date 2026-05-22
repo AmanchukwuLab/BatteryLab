@@ -87,7 +87,8 @@ def clear_vial(inventory_data: Inventory | dict, x_ind: int, y_ind: int) -> Inve
     if target.current_solution_name:
         target.previous_solution_name = target.current_solution_name
     target.current_solution_name = None
-    target.current_solution_density_g_per_ml = None
+    # When clearing a vial, keep a valid density value to satisfy the model; use 1.0 as a neutral placeholder.
+    target.current_solution_density_g_per_ml = 1.0
     target.volume_ul = 0.0
 
     return Inventory(**(inventory.model_dump() if hasattr(inventory, "model_dump") else inventory.dict()))

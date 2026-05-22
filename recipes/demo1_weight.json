@@ -1,0 +1,18 @@
+[
+  { 
+    "recipe_name": "demo_weight_cell_00",
+    "electrolyte_volume_ul": 50,
+    "ingredients": [
+      {"solution_name": "ZnSO4_1M_water", "weight_percent": 30},
+      {"solution_name": "ZnCl2_1M_water", "weight_percent": 70}
+    ]
+  },
+  {
+    "recipe_name": "demo_weight_cell_01",
+    "electrolyte_volume_ul": 50,
+    "ingredients": [
+      {"solution_name": "ZnSO4_1M_water", "weight_percent": 10},
+      {"solution_name": "ZnCl2_1M_water", "weight_percent": 90}
+    ]
+  }
+]

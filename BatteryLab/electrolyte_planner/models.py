@@ -1,4 +1,4 @@
-"""Pydantic models for electrolyte inventory and formulation plans."""
+"""Pydantic models (essentially unique data structures and containers) for electrolyte inventory and formulation plans."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ class FormulationRequest(BaseModel):
 
     recipe_name: str = Field(..., min_length=1)
     destination: str = Field(default="mix_vessel", min_length=1)
-    target_total_volume_ul: Optional[float] = Field(default=None, gt=0)
+    electrolyte_volume_ul: Optional[float] = Field(default=None, gt=0)
     ingredients: List[IngredientRequirement] = Field(default_factory=list)
 
     @validator("recipe_name", "destination")
@@ -67,9 +67,9 @@ class FormulationRequest(BaseModel):
         if has_weight and has_volume:
             raise ValueError("ingredients must be all volume-based or all weight-percent-based")
 
-        target_total_volume_ul = values.get("target_total_volume_ul")
-        if has_weight and target_total_volume_ul is None:
-            raise ValueError("target_total_volume_ul is required for weight-percent recipes")
+        electrolyte_volume_ul = values.get("electrolyte_volume_ul")
+        if has_weight and electrolyte_volume_ul is None:
+            raise ValueError("electrolyte_volume_ul is required for weight-percent recipes")
 
         if has_weight:
             total_wt_percent = sum(item.weight_percent or 0.0 for item in ingredients)
@@ -105,7 +105,7 @@ class VialContents(BaseModel):
     y_ind: int = Field(..., ge=0)
     current_solution_name: Optional[str] = None
     previous_solution_name: Optional[str] = None
-    current_solution_density_g_per_ml: Optional[float] = Field(default=None, gt=0)
+    current_solution_density_g_per_ml: float = Field(..., gt=0)
     volume_ul: float = Field(..., ge=0, le=VIAL_MAX_VOLUME_UL)
     capacity_ul: float = Field(default=VIAL_MAX_VOLUME_UL, gt=0, le=VIAL_MAX_VOLUME_UL)
     low_volume_threshold_ul: float = Field(default=DEFAULT_LOW_VOLUME_THRESHOLD_UL, ge=0)
@@ -117,13 +117,10 @@ class VialContents(BaseModel):
         value = value.strip()
         return value or None
 
-    @validator("current_solution_density_g_per_ml", always=True)
-    def _validate_density_for_current_solution(cls, density: Optional[float], values: dict) -> Optional[float]:
-        current_solution = values.get("current_solution_name")
-        if current_solution and density is None:
-            raise ValueError("current_solution_density_g_per_ml is required when current_solution_name is set")
-        if not current_solution and density is not None:
-            raise ValueError("current_solution_density_g_per_ml must be null when current_solution_name is null")
+    @validator("current_solution_density_g_per_ml")
+    def _validate_density_positive(cls, density: float) -> float:
+        if density is None or density <= 0:
+            raise ValueError("current_solution_density_g_per_ml must be provided and > 0 for every vial")
         return density
 
     @validator("low_volume_threshold_ul")
@@ -198,6 +195,81 @@ class FormulationPlan(BaseModel):
         if not value:
             raise ValueError("must not be empty")
         return value
+
+
+class TipContents(BaseModel):
+    """A single pipette tip tracking current substance usage."""
+
+    index: int = Field(..., ge=0, le=95)
+    current_substance_name: Optional[str] = None
+    last_used_timestamp: Optional[str] = None
+
+    @validator("current_substance_name", pre=True)
+    def _normalize_optional_substance(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = str(value).strip()
+        return value or None
+
+
+class TipRack(BaseModel):
+    """A 96-tip rack (1D array of tips)."""
+
+    tips: List[TipContents] = Field(default_factory=list)
+
+    @validator("tips")
+    def _check_unique_tips(cls, tips: List[TipContents]) -> List[TipContents]:
+        seen = set()
+        for tip in tips:
+            if tip.index in seen:
+                raise ValueError(f"duplicate tip index: {tip.index}")
+            seen.add(tip.index)
+        return tips
+
+    def find_clean_tip_for_substance(self, substance_name: Optional[str]) -> Optional[int]:
+        """Find a tip that was previously used for the same substance or is clean.
+        
+        Priority:
+        1. Tip used for exact same substance (still has residue, faster reuse)
+        2. Any clean tip (current_substance_name is None)
+        3. None if no suitable tip found
+        """
+        if substance_name is None:
+            # Find any clean tip for neutral/unknown substance
+            for tip in sorted(self.tips, key=lambda t: t.index):
+                if tip.current_substance_name is None:
+                    return tip.index
+            return None
+
+        # First pass: find tip used for this substance
+        for tip in sorted(self.tips, key=lambda t: t.index):
+            if tip.current_substance_name == substance_name:
+                return tip.index
+
+        # Second pass: find any clean tip
+        for tip in sorted(self.tips, key=lambda t: t.index):
+            if tip.current_substance_name is None:
+                return tip.index
+
+        return None
+
+    def mark_tip_used(self, tip_index: int, substance_name: Optional[str]) -> None:
+        """Mark a tip as used for a specific substance."""
+        for tip in self.tips:
+            if tip.index == tip_index:
+                tip.current_substance_name = substance_name
+                from datetime import datetime
+                tip.last_used_timestamp = datetime.now().isoformat()
+                return
+        raise ValueError(f"Tip index {tip_index} not found in rack")
+
+    def mark_tip_clean(self, tip_index: int) -> None:
+        """Mark a tip as cleaned/replaced."""
+        for tip in self.tips:
+            if tip.index == tip_index:
+                tip.current_substance_name = None
+                return
+        raise ValueError(f"Tip index {tip_index} not found in rack")
 
 
 class Inventory(BaseModel):

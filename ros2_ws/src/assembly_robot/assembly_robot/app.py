@@ -1,9 +1,7 @@
-import argparse
 import csv
 import json
 import re
 import statistics
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Sequence
@@ -17,6 +15,7 @@ from .CrimperRobot import CrimperRobot, crimper_robot_command_loop
 from .LiquidRobot import LiquidRobot, liquid_robot_command_loop
 from BatteryLab.electrolyte_planner import (
     DEFAULT_STATE_PATH,
+    DEFAULT_TIP_RACK_PATH,
     clear_vial,
     load_inventory_state,
     print_vial_statuses,
@@ -26,6 +25,9 @@ from BatteryLab.electrolyte_planner import (
     evaluate_formulation,
     evaluate_formulation_with_vials,
     Inventory,
+    load_tip_rack_state,
+    save_tip_rack_state,
+    TipRack,
 )
 from BatteryLab.robots.Constants import Components
 
@@ -34,6 +36,20 @@ def _component_slug(component_name: str) -> str:
     component_name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", component_name)
     component_name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", component_name)
     return component_name.lower()
+
+
+def _tip_index_to_coordinates(tip_index: int) -> tuple[int, int]:
+    """Convert a linear tip index (0-95) to 96-well plate (x, y) coordinates.
+    
+    96-well plates are typically 8 rows x 12 columns:
+    - x ranges 0-11 (columns)
+    - y ranges 0-7  (rows)
+    """
+    if not (0 <= tip_index <= 95):
+        raise ValueError(f"Tip index must be 0-95, got {tip_index}")
+    x = tip_index % 12
+    y = tip_index // 12
+    return x, y
 
 
 def _load_recipes_file(recipe_path: Path) -> list[dict]:
@@ -84,12 +100,12 @@ def _assess_batch_requirements(recipes: list[dict], inventory: Inventory) -> tup
             continue
 
         # weight-percent recipe: convert to volumes using inventory densities
-        target_total_volume_ul = recipe.get("target_total_volume_ul") or recipe.get("electrolyte_volume_ul")
-        if target_total_volume_ul is None:
+        electrolyte_volume_ul = recipe.get("electrolyte_volume_ul")
+        if electrolyte_volume_ul is None:
             raise ValueError(
-                f"Weight-percent recipe '{recipe.get('recipe_name')}' missing target_total_volume_ul"
+                f"Weight-percent recipe '{recipe.get('recipe_name')}' missing electrolyte_volume_ul"
             )
-        target_volume_ml = float(target_total_volume_ul) / 1000.0
+        target_volume_ml = float(electrolyte_volume_ul) / 1000.0
 
         weight_over_density = []
         for ing in ingredients:
@@ -141,7 +157,7 @@ def _simulate_recipe_execution(recipe: dict, inventory: Inventory) -> None:
     instructions = plan.get("instructions", [])
     if not instructions:
         # Fall back to a single-volume action if planner produced no instructions
-        vol = recipe.get("electrolyte_volume_ul") or recipe.get("target_total_volume_ul") or 0
+        vol = recipe.get("electrolyte_volume_ul") or 0
         print(f"Simulate: Acquire tip (simulated)")
         print(f"Simulate: Dispense {float(vol):.1f} uL to assembly post (single-vessel fallback)")
         print(f"Simulate: Return/drop tip (simulated)")
@@ -170,12 +186,13 @@ def _simulate_recipe_execution_with_movements(recipe: dict, inventory: Inventory
     """Simulate the recipe while commanding only MG400 movements (no aspirate/dispense).
 
     Behavior:
+    - Load the tip rack and select an appropriate tip based on substances used (like real assembly).
     - Move the MG400 to acquire the correct tip (down then up) but do NOT call the aspirate
       method used to physically pick a tip.
     - Move (without descending) to each source vial location for the planned instructions.
     - Return the tip to the tip rack (movement only, no eject).
     """
-    #TODO: come back and proofread this
+    # Get recipe, confirm feasibility
     name = recipe.get("recipe_name", "<unnamed>")
     print(f"\n--- Movement-simulation for recipe: {name} ---")
     try:
@@ -188,54 +205,85 @@ def _simulate_recipe_execution_with_movements(recipe: dict, inventory: Inventory
         print(f"Recipe '{name}' is NOT feasible. Issues: {plan.get('issues', [])}")
         return
 
+    # Get instructions, connect to liquid handler
     instructions = plan.get("instructions", [])
     mg = liquid_robot.MG400
-    tip_x, tip_y = 0, 0
-
-    print("Simulating: Acquire tip (movement only)")
+    mg.move_home()  # ensure we start from a known position
+    
+    # Load tip rack and select an appropriate tip (matching real assembly behavior)
     try:
-        # Move down to tip 
-        mg.get_tip(tip_x, tip_y)
+        tip_rack = load_tip_rack_state()
     except Exception as e:
-        print(f"Movement to tip failed (simulated): {e}")
-
-    if not instructions:
-        vol = recipe.get("electrolyte_volume_ul") or recipe.get("target_total_volume_ul") or 0
-        print(f"Simulate movement: move to default liquid location (movement only)")
-        try:
-            mg.move_to_liquid(0, 0, level=1)
-        except Exception as e:
-            print(f"Movement to default liquid failed (simulated): {e}")
-        print(f"Simulated: would dispense {float(vol):.1f} uL to assembly post (no action)")
-        print("Simulating: Return tip (movement only)")
-        try:
-            mg.move_to_tip_case(tip_x, tip_y, level=0.4)
-            mg.move_home()
-        except Exception:
-            pass
-        print(f"--- End movement-simulation for recipe: {name} ---\n")
+        print(f"Failed to load tip rack state: {e}")
         return
-
+    
+    # Mime movements for each instruction, getting fresh tips when substance changes
     print("Simulated pipetting movements:")
+    current_substance = None
+    tip_index = None
+    tip_x = None
+    tip_y = None
+    
     for instr in instructions:
         step = instr.get("step_index")
+        instr_substance = instr.get("source_solution")
         sx = int(instr.get("source_x_ind", 0))
         sy = int(instr.get("source_y_ind", 0))
         vol = float(instr.get("volume_ul", 0.0) or 0.0)
-        print(f"  Step {step}: move to vial ({sx},{sy}) containing '{instr.get('source_solution')}' (movement only)")
+        
+        # Check if substance changed; if so, drop current tip and get a new one
+        if instr_substance != current_substance:
+            # Drop the current tip if we have one and mark it as used
+            if tip_index is not None:
+                print(f"  Returning tip {tip_index} to tip rack (substance changed)")
+                try:
+                    mg.drop_tip(tip_x, tip_y)
+                except Exception as e:
+                    print(f"    Movement to return tip failed (simulated): {e}")
+                # Mark the tip as used for its substance
+                tip_rack.mark_tip_used(tip_index, current_substance)
+            
+            # Get a new tip for the new substance
+            current_substance = instr_substance
+            tip_index = tip_rack.find_clean_tip_for_substance(current_substance)
+            if tip_index is None:
+                tip_index = tip_rack.find_clean_tip_for_substance(None)
+            if tip_index is None:
+                tip_index = 0  # Force use of first tip if none are clean
+            
+            tip_x, tip_y = _tip_index_to_coordinates(tip_index)
+            print(f"  Acquiring tip {tip_index} at ({tip_x}, {tip_y}) for substance '{current_substance}'")
+            try:
+                mg.get_tip(tip_x, tip_y)
+            except Exception as e:
+                print(f"    Movement to tip failed (simulated): {e}")
+        
+        # Execute the instruction
+        print(f"  Step {step}: move to vial ({sx},{sy}) containing '{instr_substance}' (movement only)")
         try:
             # Move to vial up-position only so we do not descend into liquid
-            mg.move_to_liquid(sx, sy, level=1)
+            mg.get_liquid(sx, sy, vol, mime=True)
         except Exception as e:
             print(f"    Movement to vial failed (simulated): {e}")
         print(f"           would aspirate {vol:.1f} uL (no action), then move to assembly post (no action)")
-
-    print("Simulating: Return tip to tip rack (movement only)")
+    
+    # Return the final tip to the tip rack and mark as used
+    if tip_index is not None:
+        print(f"  Returning final tip {tip_index} to tip rack")
+        try:
+            mg.drop_tip(tip_x, tip_y)
+            mg.move_home()
+        except Exception:
+            pass
+        # Mark the final tip as used to persist state across simulations
+        tip_rack.mark_tip_used(tip_index, current_substance)
+    
+    # Persist tip rack state so subsequent simulations use updated state
     try:
-        mg.move_to_tip_case(tip_x, tip_y, level=0.4)
-        mg.move_home()
-    except Exception:
-        pass
+        save_tip_rack_state(tip_rack)
+        print(f"  Tip rack state persisted to disk")
+    except Exception as e:
+        print(f"  Warning: Failed to save tip rack state: {e}")
 
     print(f"--- End movement-simulation for recipe: {name} ---\n")
 
@@ -314,8 +362,6 @@ class BatterySessionTracker:
         if recipe is not None:
             record["recipe_name"] = str(recipe.get("recipe_name", "")).strip()
             recipe_total_volume = recipe.get("electrolyte_volume_ul")
-            if recipe_total_volume is None:
-                recipe_total_volume = recipe.get("target_total_volume_ul")
             if recipe_total_volume is not None:
                 record["recipe_total_volume_ul"] = str(recipe_total_volume)
             record["recipe_payload_json"] = json.dumps(recipe, sort_keys=True)
@@ -449,7 +495,7 @@ class AutoBatteryLab(Node):
         if recipe is None:
             return 50.0
 
-        for key in ("electrolyte_volume_ul", "target_total_volume_ul"):
+        for key in ("electrolyte_volume_ul",):
             value = recipe.get(key)
             if value is not None:
                 volume_ul = float(value)
@@ -597,11 +643,19 @@ class AutoBatteryLab(Node):
                 )
             # 6.(2) Add electrolyte using planner instructions when recipe provided
             self.liquid_robot.MG400.move_home()
-            tip_x, tip_y = 0, 0
             try:
+                # Load tip rack and select an appropriate tip
+                tip_rack = load_tip_rack_state()
+                
                 if recipe is None or not recipe.get("ingredients"):
                     # Fall back to single-volume dispense
                     volume_to_get = self._electrolyte_volume_for_recipe(recipe)
+                    # Try to find a clean tip; if none, use first tip and mark as used
+                    tip_index = tip_rack.find_clean_tip_for_substance(None)
+                    if tip_index is None:
+                        tip_index = 0  # Force use of first tip if none are clean
+                    tip_x, tip_y = _tip_index_to_coordinates(tip_index)
+                    
                     self.liquid_robot.MG400.get_tip(tip_x, tip_y)
                     # default single-bottle coordinates
                     liquid_x, liquid_y = 0, 0
@@ -610,6 +664,10 @@ class AutoBatteryLab(Node):
                     self.liquid_robot.MG400.return_liquid(liquid_x, liquid_y)
                     self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
                     self.liquid_robot.MG400.move_home()
+                    
+                    # Mark tip as used for unknown substance
+                    tip_rack.mark_tip_used(tip_index, None)
+                    save_tip_rack_state(tip_rack)
                 else:
                     # Use electrolyte planner to allocate from vials and update inventory
                     inventory = load_inventory_state()
@@ -623,9 +681,35 @@ class AutoBatteryLab(Node):
                         return
 
                     instructions = plan_payload.get("instructions", [])
-                    # Acquire a tip once for the sequence
-                    self.liquid_robot.MG400.get_tip(tip_x, tip_y)
+                    
+                    # Execute instructions, getting a fresh tip each time the substance changes
+                    current_substance = None
+                    tip_index = None
+                    tip_x = None
+                    tip_y = None
+                    
                     for instr in instructions:
+                        instr_substance = instr.get("source_solution")
+                        
+                        # Check if substance changed; if so, drop current tip and get a new one
+                        if instr_substance != current_substance:
+                            # Drop the current tip if we have one
+                            if tip_index is not None:
+                                self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
+                                tip_rack.mark_tip_used(tip_index, current_substance)
+                            
+                            # Get a new tip for the new substance
+                            current_substance = instr_substance
+                            tip_index = tip_rack.find_clean_tip_for_substance(current_substance)
+                            if tip_index is None:
+                                tip_index = tip_rack.find_clean_tip_for_substance(None)
+                            if tip_index is None:
+                                tip_index = 0  # Force use of first tip if none are clean
+                            
+                            tip_x, tip_y = _tip_index_to_coordinates(tip_index)
+                            self.liquid_robot.MG400.get_tip(tip_x, tip_y)
+                        
+                        # Execute the instruction
                         sx = int(instr.get("source_x_ind", 0))
                         sy = int(instr.get("source_y_ind", 0))
                         vol = float(instr.get("volume_ul", 0.0))
@@ -636,8 +720,14 @@ class AutoBatteryLab(Node):
                         self.liquid_robot.MG400.add_liquid_to_post(vol)
                         # Blowout/return to source to clear the tip
                         self.liquid_robot.MG400.return_liquid(sx, sy)
-                    self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
+                    
+                    # Drop the final tip and mark as used
+                    if tip_index is not None:
+                        self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
+                        tip_rack.mark_tip_used(tip_index, current_substance)
+                    
                     self.liquid_robot.MG400.move_home()
+                    save_tip_rack_state(tip_rack)
 
                     # Persist updated inventory returned by the planner
                     updated_inv = plan_payload.get("updated_inventory")
@@ -691,20 +781,6 @@ class AutoBatteryLab(Node):
         self.put_a_component_on_assembly_post(Components.Separator, order=4)
 
 
-def _read_positive_float(prompt: str) -> float:
-    while True:
-        raw = input(prompt).strip()
-        try:
-            value = float(raw)
-        except ValueError:
-            print("Please enter a numeric value.")
-            continue
-        if value <= 0:
-            print("Please enter a value greater than zero.")
-            continue
-        return value
-
-
 def _is_cancel(value: str) -> bool:
     return value.strip().lower() in {"q", "x", "cancel"}
 
@@ -743,8 +819,13 @@ def _read_non_negative_int_or_cancel(prompt: str):
 
 def electrolyte_planner_menu(batterylab: AutoBatteryLab):
     logger = batterylab.get_logger()
-    inventory = load_inventory_state()
-    logger.info(f"Loaded electrolyte inventory from {DEFAULT_STATE_PATH}")
+    try:
+        inventory = load_inventory_state()
+        logger.info(f"Loaded electrolyte inventory from {DEFAULT_STATE_PATH}")
+    except Exception as e:
+        logger.warning(f"Initial electrolyte inventory load failed: {e}")
+        print(f"Unable to open electrolyte planner: {e}")
+        return
 
     prompt = """------------------------
 Electrolyte Planner Menu
@@ -844,8 +925,12 @@ Electrolyte Planner Menu
                 print(f"Failed to clear vial: {e}")
             continue
         if user_input == "r":
-            inventory = load_inventory_state()
-            print("Reloaded inventory from disk.")
+            try:
+                inventory = load_inventory_state()
+                print("Reloaded inventory from disk.")
+            except Exception as e:
+                logger.error(f"Failed to reload electrolyte inventory: {e}")
+                print(f"Failed to reload inventory: {e}")
             continue
         if user_input == "s":
             save_inventory_state(inventory)
@@ -858,9 +943,184 @@ Electrolyte Planner Menu
         print("The choice is not valid. Please try again.")
 
 
+def tip_management_menu(batterylab: AutoBatteryLab):
+    """Menu for managing pipette tips (96-tip rack) and tracking usage."""
+    logger = batterylab.get_logger()
+    try:
+        tip_rack = load_tip_rack_state()
+        logger.info(f"Loaded tip rack state from {DEFAULT_TIP_RACK_PATH}")
+    except Exception as e:
+        logger.warning(f"Initial tip rack load failed: {e}")
+        print(f"Unable to open tip manager: {e}")
+        return
+
+    prompt = """------------------------
+Tip Management Menu
+[V]iew tip status
+[M]ark tip as used for substance
+[C]lean/replace tip
+[L]ist recent tip usage
+[R]eset all tips to clean
+[S]ave tip state to disk
+[Enter] Back to main menu
+:> """
+
+    while True:
+        user_input = input(prompt).strip().lower()
+        if len(user_input) > 1:
+            user_input = user_input[0]
+        if user_input == "":
+            break
+        if user_input == "v":
+            # Show tip status
+            clean_tips = [tip.index for tip in tip_rack.tips if tip.current_substance_name is None]
+            used_tips = [tip for tip in tip_rack.tips if tip.current_substance_name is not None]
+            print(f"\n--- Tip Rack Status ---")
+            print(f"Clean tips ({len(clean_tips)}): {clean_tips[:20]}", end="")
+            if len(clean_tips) > 20:
+                print(f" ... and {len(clean_tips) - 20} more")
+            else:
+                print()
+            print(f"\nUsed tips ({len(used_tips)}):")
+            for tip in sorted(used_tips, key=lambda t: t.index):
+                substance = tip.current_substance_name or "<unknown>"
+                timestamp = tip.last_used_timestamp or "unknown time"
+                print(f"  Tip {tip.index}: {substance} (last used: {timestamp})")
+            continue
+        if user_input == "m":
+            print("Type 'q' to cancel.")
+            tip_index = _read_non_negative_int_or_cancel(
+                "Tip index to mark as used (0-95): "
+            )
+            if tip_index is None or tip_index < 0 or tip_index > 95:
+                print("Invalid tip index.")
+                continue
+
+            substance_name = input("Substance/solution name (or press Enter for unknown): ").strip()
+            if _is_cancel(substance_name):
+                print("Canceled.")
+                continue
+            if not substance_name:
+                substance_name = None
+
+            try:
+                tip_rack.mark_tip_used(tip_index, substance_name)
+                save_tip_rack_state(tip_rack)
+                print(f"Marked tip {tip_index} as used for '{substance_name or 'unknown'}'.")
+            except Exception as e:
+                print(f"Failed to mark tip: {e}")
+            continue
+        if user_input == "c":
+            print("Type 'q' to cancel.")
+            tip_index = _read_non_negative_int_or_cancel(
+                "Tip index to clean/replace (0-95): "
+            )
+            if tip_index is None or tip_index < 0 or tip_index > 95:
+                print("Invalid tip index.")
+                continue
+
+            confirm = input(
+                f"Confirm cleaning tip {tip_index}? (y/n): "
+            ).strip().lower()
+            if _is_cancel(confirm):
+                print("Canceled.")
+                continue
+            if confirm != "y":
+                print("Canceled.")
+                continue
+            try:
+                tip_rack.mark_tip_clean(tip_index)
+                save_tip_rack_state(tip_rack)
+                print(f"Marked tip {tip_index} as clean.")
+            except Exception as e:
+                print(f"Failed to clean tip: {e}")
+            continue
+        if user_input == "l":
+            # Show recently used tips
+            used_tips = [tip for tip in tip_rack.tips if tip.current_substance_name is not None]
+            if not used_tips:
+                print("No tips are currently in use.")
+                continue
+            sorted_tips = sorted(used_tips, key=lambda t: t.last_used_timestamp or "", reverse=True)
+            print("\n--- Recent Tip Usage ---")
+            for tip in sorted_tips[:10]:
+                substance = tip.current_substance_name or "<unknown>"
+                timestamp = tip.last_used_timestamp or "unknown time"
+                print(f"  Tip {tip.index}: {substance} ({timestamp})")
+            continue
+        if user_input == "r":
+            confirm = input(
+                "Reset ALL tips to clean state? This will clear usage history. (y/n): "
+            ).strip().lower()
+            if confirm != "y":
+                print("Canceled.")
+                continue
+            try:
+                for tip in tip_rack.tips:
+                    tip.current_substance_name = None
+                    tip.last_used_timestamp = None
+                save_tip_rack_state(tip_rack)
+                print("All tips reset to clean state.")
+            except Exception as e:
+                print(f"Failed to reset tips: {e}")
+            continue
+        if user_input == "s":
+            try:
+                save_tip_rack_state(tip_rack)
+                print("Tip rack state saved to disk.")
+            except Exception as e:
+                logger.error(f"Failed to save tip rack: {e}")
+                print(f"Failed to save tip state: {e}")
+            continue
+        print("The choice is not valid. Please try again.")
+
+
 def _recipes_batch_menu(batterylab: AutoBatteryLab):
     logger = batterylab.get_logger()
-    recipes_path = input("Enter path to recipes JSON file: ").strip()
+    recipes_path = input("Enter path to recipes JSON file (or type 'f' to open file chooser): ").strip()
+    # Support opening a GUI file chooser and remember last-used folder
+    LAST_RECIPE_DIR_PATH = Path.home() / ".batterylab" / "last_recipe_dir.txt"
+    if recipes_path.lower() == "f":
+        try:
+            import tkinter as _tk
+            from tkinter import filedialog as _filedlg
+
+            # Initialize TK root in a safe/hidden way
+            _root = _tk.Tk()
+            _root.withdraw()
+            initial_dir = None
+            try:
+                if LAST_RECIPE_DIR_PATH.exists():
+                    initial_dir_str = LAST_RECIPE_DIR_PATH.read_text(encoding="utf-8").strip()
+                    if initial_dir_str:
+                        initial_dir = initial_dir_str
+            except Exception:
+                initial_dir = None
+
+            filename = _filedlg.askopenfilename(
+                title="Select recipes JSON file",
+                initialdir=initial_dir or str(Path.cwd()),
+                filetypes=[("JSON files", "*.json"), ("All files", "*")],
+            )
+            try:
+                _root.destroy()
+            except Exception:
+                pass
+
+            if not filename:
+                print("Canceled.")
+                return
+            recipes_path = str(filename)
+            # Persist last folder
+            try:
+                LAST_RECIPE_DIR_PATH.parent.mkdir(parents=True, exist_ok=True)
+                LAST_RECIPE_DIR_PATH.write_text(str(Path(recipes_path).parent), encoding="utf-8")
+            except Exception:
+                # non-fatal
+                pass
+        except Exception as e:
+            print(f"File chooser unavailable: {e}. Falling back to text input.")
+            recipes_path = input("Enter path to recipes JSON file: ").strip()
     if not recipes_path:
         print("Canceled.")
         return
@@ -904,8 +1164,28 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
                 return
         if action == "m":
             # Run movement-only simulation (commands MG400 to move to tips/vials but does not aspirate)
-            for recipe in recipes:
-                _simulate_recipe_execution_with_movements(recipe, inventory, batterylab.liquid_robot)
+            # Allow user to select which recipe(s) to simulate
+            while True:
+                print("\n--- Available Recipes for Simulation ---")
+                for idx, recipe in enumerate(recipes, start=1):
+                    recipe_name = recipe.get("recipe_name", f"recipe_{idx}")
+                    print(f"{idx}. {recipe_name}")
+                print("q. Quit simulation and proceed to assembly")
+                
+                selection = input("Select recipe number to simulate (or 'q' to quit): ").strip().lower()
+                
+                if selection == "q":
+                    break
+                
+                try:
+                    recipe_idx = int(selection) - 1
+                    if 0 <= recipe_idx < len(recipes):
+                        _simulate_recipe_execution_with_movements(recipes[recipe_idx], inventory, batterylab.liquid_robot)
+                    else:
+                        print(f"Invalid selection. Please enter a number between 1 and {len(recipes)}.")
+                except ValueError:
+                    print("Invalid input. Please enter a recipe number or 'q'.")
+            
             action = input("Proceed to assemble these recipes now? (y/n): ").strip().lower()
             if action != "y":
                 print("Canceled after movement-simulation.")
@@ -930,10 +1210,18 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
 
 
 def command_loop(batterylab: AutoBatteryLab):
-    prompt = """Press [Enter] to quit, [A]ssembly to go to assembly_robot's command list,
-[L]iquid to go to liquid_robot's command list, [C]rimper to go to crimper_robot's command list.
-[B]atch recipes file to assemble series of batteries, or [O]ne battery for single assembly.
-[E]lectrolyte planner to manage vial contents and cleaning status.
+    prompt = """
+===============================================
+Welcome to BatteryLab! Please select a command:
+[Enter] to quit
+[A]ssembly robot submenu
+[L]iquid   robot submenu
+[C]rimper  robot submenu
+[B]atch recipes file input to assemble series of batteries
+[O]ne battery demonstration (single assembly using defaults and no recipe)
+[E]lectrolyte vial manager
+[T]ip (pipette) manager
+[S]eparator test (coordinated movement using both Meca robots)
 :> """
     batterylab.assembly_robot.load_counter_config()
     while True:
@@ -957,6 +1245,8 @@ def command_loop(batterylab: AutoBatteryLab):
                 batterylab.get_logger().error(f"Battery assembly failed: {e}")
         elif user_input == "e":
             electrolyte_planner_menu(batterylab)
+        elif user_input == "t":
+            tip_management_menu(batterylab)
         elif user_input == "s":
             if input("Run separator placement test? (y/n, default n): ").strip().lower() == "y":
                 batterylab.test_separator_placement()

@@ -14,7 +14,7 @@ The planner supports two recipe input modes:
 
 - volume-based ingredients (`volume_ul` per component),
 - weight-percent ingredients (`weight_percent` per component) with
-    `target_total_volume_ul`.
+    `electrolyte_volume_ul`.
 
 For weight-percent mode, each component's density is read from its assigned vial
 (`current_solution_density_g_per_ml`) and used to convert weight fractions to
@@ -24,21 +24,20 @@ required dispense volumes.
 
 ```python
 from BatteryLab.electrolyte_planner import evaluate_formulation
-
 inventory = {
     "vials": [
-        {"x_ind": 0, "y_ind": 0, "current_solution_name": "LiPF6_1M", "current_solution_density_g_per_ml": 1.20, "volume_ul": 500},
-        {"x_ind": 0, "y_ind": 1, "current_solution_name": "EC_DMC_1to1", "current_solution_density_g_per_ml": 1.10, "volume_ul": 1200},
-        {"x_ind": 1, "y_ind": 0, "current_solution_name": "LiPF6_1M", "current_solution_density_g_per_ml": 1.20, "volume_ul": 300},
+        {"x_ind": 0, "y_ind": 0, "current_solution_name": "ZnSO4_1M_water", "current_solution_density_g_per_ml": 1.02, "volume_ul": 800},
+        {"x_ind": 0, "y_ind": 1, "current_solution_name": "H2O", "current_solution_density_g_per_ml": 1.000, "volume_ul": 2000},
+        {"x_ind": 1, "y_ind": 0, "current_solution_name": "ZnCl2_1M_water", "current_solution_density_g_per_ml": 1.04, "volume_ul": 400},
     ]
 }
 
 request = {
-    "recipe_name": "baseline_electrolyte",
+    "recipe_name": "zn_aqueous_baseline",
     "destination": "mix_vessel_01",
     "ingredients": [
-        {"solution_name": "LiPF6_1M", "volume_ul": 600},
-        {"solution_name": "EC_DMC_1to1", "volume_ul": 800},
+        {"solution_name": "ZnSO4_1M_water", "volume_ul": 600},
+        {"solution_name": "H2O", "volume_ul": 800},
     ],
 }
 
@@ -57,21 +56,20 @@ Transfer instructions use `source_x_ind` and `source_y_ind`.
 
 ```python
 from BatteryLab.electrolyte_planner import evaluate_formulation
-
 inventory = {
     "vials": [
-        {"x_ind": 0, "y_ind": 0, "current_solution_name": "EC", "current_solution_density_g_per_ml": 1.321, "volume_ul": 1000},
-        {"x_ind": 0, "y_ind": 1, "current_solution_name": "DMC", "current_solution_density_g_per_ml": 1.069, "volume_ul": 1000},
+        {"x_ind": 0, "y_ind": 0, "current_solution_name": "ZnSO4_stock", "current_solution_density_g_per_ml": 1.030, "volume_ul": 1200},
+        {"x_ind": 0, "y_ind": 1, "current_solution_name": "H2O", "current_solution_density_g_per_ml": 1.000, "volume_ul": 2000},
     ]
 }
 
 request = {
-    "recipe_name": "ec_dmc_50_50wt",
+    "recipe_name": "zn_water_50wt",
     "destination": "mix_vessel_01",
-    "target_total_volume_ul": 600,
+    "electrolyte_volume_ul": 600,
     "ingredients": [
-        {"solution_name": "EC", "weight_percent": 50.0},
-        {"solution_name": "DMC", "weight_percent": 50.0},
+        {"solution_name": "ZnSO4_stock", "weight_percent": 50.0},
+        {"solution_name": "H2O", "weight_percent": 50.0},
     ],
 }
 
@@ -128,7 +126,7 @@ from BatteryLab.electrolyte_planner import (
 inventory = load_inventory_state()
 
 # Set or replace what is in a vial
-inventory = set_vial_contents(inventory, 0, 0, "LiPF6_1M", 1450, 1.20)
+inventory = set_vial_contents(inventory, 0, 0, "ZnSO4_1M", 1450, 1.03)
 
 # Clear a vial while preserving previous_solution_name
 inventory = clear_vial(inventory, 0, 1)

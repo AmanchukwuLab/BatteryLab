@@ -277,6 +277,8 @@ class MG400:
         self.logger.debug("The MG400 has been homed!")
 
     def move_to_tip_case(self, x, y, level=1):
+        # Validate coordinates before proceeding
+        self._validate_tip_index(x, y)
         # The level is a percentage of the height, 0 will be at the down pos, 1 will be at the up pos
         self.dashboard.Tool(index=0)
         self.dashboard.SpeedJ(10)
@@ -324,6 +326,8 @@ class MG400:
         self.movectl.Sync()
 
     def move_to_liquid(self, x, y, level=1):
+        # Validate coordinates before proceeding
+        self._validate_liquid_index(x, y)
         self.dashboard.Tool(index=0)
         self.dashboard.SpeedJ(10)
         up_pos = self.liquid_poses_up[self.get_liquid_index(x, y)]
@@ -341,16 +345,19 @@ class MG400:
             self.movectl.Sync()
         self.logger.info(f"finished moving for liquid bottle ({x}, {y}).")
 
-    def get_liquid(self, x, y, volume):
+    def get_liquid(self, x, y, volume, mime=False):
+        # Mime option for simulating recipes: will not actually aspirate
         self.move_to_liquid(x, y)
-        self.dashboard.SpeedL(3)
-        self.movectl.MovL(*self.liquid_poses_down[self.get_liquid_index(x, y)])
-        self.movectl.Sync()
-        # TODO: level sensing and ensure the liquid is enough
-        # self.logger.info(f"The current liquid level: {self.sartorius_rline.tellLevel()}")
-        self.sartorius_rline.aspirate(volume)
-        self.movectl.MovL(*self.liquid_poses_up[self.get_liquid_index(x, y)])
-        self.movectl.Sync()
+        if not mime:
+            self.dashboard.SpeedL(3)
+            self.movectl.MovL(*self.liquid_poses_down[self.get_liquid_index(x, y)])
+            self.movectl.Sync()
+            # TODO: level sensing and ensure the liquid is enough
+            # self.logger.info(f"The current liquid level: {self.sartorius_rline.tellLevel()}")
+            
+            self.sartorius_rline.aspirate(volume)
+            self.movectl.MovL(*self.liquid_poses_up[self.get_liquid_index(x, y)])
+            self.movectl.Sync()
         self.move_home()
 
     def return_liquid(self, x, y):
@@ -372,6 +379,34 @@ class MG400:
         self.movectl.MovL(*self.assembly_pose_up)
         self.movectl.Sync()
         self.move_home()
+
+    def _validate_tip_index(self, x, y):
+        """Validate tip case coordinates are within valid range (8 x 12 grid)."""
+        if not isinstance(x, int) or not isinstance(y, int):
+            raise ValueError(f"Tip coordinates must be integers, got x={type(x).__name__}, y={type(y).__name__}")
+        if not (0 <= x < self.tip_m):
+            raise ValueError(
+                f"Tip x-coordinate out of bounds: x={x}, valid range is [0, {self.tip_m-1}]"
+            )
+        if not (0 <= y < self.tip_n):
+            raise ValueError(
+                f"Tip y-coordinate out of bounds: y={y}, valid range is [0, {self.tip_n-1}]"
+            )
+
+    def _validate_liquid_index(self, x, y):
+        """Validate liquid vial holder coordinates are within valid range (4 x 4 grid)."""
+        if not isinstance(x, int) or not isinstance(y, int):
+            raise ValueError(
+                f"Liquid coordinates must be integers, got x={type(x).__name__}, y={type(y).__name__}"
+            )
+        if not (0 <= x < self.liquid_m):
+            raise ValueError(
+                f"Liquid x-coordinate out of bounds: x={x}, valid range is [0, {self.liquid_m-1}]"
+            )
+        if not (0 <= y < self.liquid_n):
+            raise ValueError(
+                f"Liquid y-coordinate out of bounds: y={y}, valid range is [0, {self.liquid_n-1}]"
+            )
 
     def get_tip_index(self, x, y):
         return x * self.tip_n + y
@@ -512,49 +547,55 @@ def main_loop(mg400: MG400):
 """
     try:
         while True:
-            input_str = input(prompt).strip().upper()
-            if input_str == "":
-                break
-            elif input_str == "Z":
-                manual_position_loop(mg400)
-            elif input_str == "T":
-                mg400.manual_adjust_tip_up_positions()
-            elif input_str == "0":
-                mg400.move_home()
-            elif input_str == "M":
-                choice = input("Please select which case to go (tip/liquid):")
-                if choice == "tip":
+            try:
+                input_str = input(prompt).strip().upper()
+                if input_str == "":
+                    break
+                elif input_str == "Z":
+                    manual_position_loop(mg400)
+                elif input_str == "T":
+                    mg400.manual_adjust_tip_up_positions()
+                elif input_str == "0":
+                    mg400.move_home()
+                elif input_str == "M":
+                    choice = input("Please select which case to go (tip/liquid):")
+                    if choice == "tip":
+                        x = int(input("Please input tip index x:").strip())
+                        y = int(input("Please input tip index y:").strip())
+                        mg400.move_to_tip_case(x, y)
+                    elif choice == "liquid":
+                        x = int(input("Please input liquid index x:").strip())
+                        y = int(input("Please input liquid index y:").strip())
+                        mg400.move_to_liquid(x, y)
+                    else:
+                        print("Your choice is invalid!")
+                elif input_str == "G":
                     x = int(input("Please input tip index x:").strip())
                     y = int(input("Please input tip index y:").strip())
-                    mg400.move_to_tip_case(x, y)
-                elif choice == "liquid":
+                    mg400.get_tip(x, y)
+                elif input_str == "D":
+                    x = int(input("Please input tip index x:").strip())
+                    y = int(input("Please input tip index y:").strip())
+                    mg400.drop_tip(x, y)
+                elif input_str == "R":
                     x = int(input("Please input liquid index x:").strip())
                     y = int(input("Please input liquid index y:").strip())
-                    mg400.move_to_liquid(x, y)
+                    mg400.return_liquid(x, y)
+                elif input_str == "J":
+                    volume = int(input("Please input volume:").strip())
+                    mg400.add_liquid_to_post(volume)
+                elif input_str == "A":
+                    x = int(input("Please input liquid index x:").strip())
+                    y = int(input("Please input liquid index y:").strip())
+                    volume = int(input("Please input volume:").strip())
+                    mg400.get_liquid(x, y, volume)
                 else:
-                    print("Your choice is invalid!")
-            elif input_str == "G":
-                x = int(input("Please input tip index x:").strip())
-                y = int(input("Please input tip index y:").strip())
-                mg400.get_tip(x, y)
-            elif input_str == "D":
-                x = int(input("Please input tip index x:").strip())
-                y = int(input("Please input tip index y:").strip())
-                mg400.drop_tip(x, y)
-            elif input_str == "R":
-                x = int(input("Please input tip index x:").strip())
-                y = int(input("Please input tip index y:").strip())
-                mg400.return_liquid(x, y)
-            elif input_str == "J":
-                volume = int(input("Please input volume:").strip())
-                mg400.add_liquid_to_post(volume)
-            elif input_str == "A":
-                x = int(input("Please input tip index x:").strip())
-                y = int(input("Please input tip index y:").strip())
-                volume = int(input("Please input volume:").strip())
-                mg400.get_liquid(x, y, volume)
-            else:
-                print("Invalid input. Please enter a valid option.")
+                    print("Invalid input. Please enter a valid option.")
+            except ValueError as e:
+                print(f"Error: {e}")
+                print("Please ensure coordinates are valid integers and within range.")
+            except Exception as e:
+                print(f"Operation failed: {e}")
     except KeyboardInterrupt:
         print("Program interrupted by user.")
     finally:

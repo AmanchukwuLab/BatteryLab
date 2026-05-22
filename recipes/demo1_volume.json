@@ -1,0 +1,18 @@
+[
+  {
+    "recipe_name": "demo_volume_cell_00",
+    "electrolyte_volume_ul": 50,
+    "ingredients": [
+      {"solution_name": "ZnSO4_1M_water", "volume_ul": 20},
+      {"solution_name": "ZnCl2_1M_water", "volume_ul": 30}
+    ]
+  },
+  {
+    "recipe_name": "demo_volume_cell_01",
+    "electrolyte_volume_ul": 50,
+    "ingredients": [
+      {"solution_name": "ZnSO4_1M_water", "volume_ul": 25},
+      {"solution_name": "ZnCl2_1M_water", "volume_ul": 25}
+    ]
+  }
+]

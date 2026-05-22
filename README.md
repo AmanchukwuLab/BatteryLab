@@ -87,16 +87,16 @@ Example recipe file (for the [B]atch option):
     "recipe_name": "baseline_cell_01",
     "electrolyte_volume_ul": 50,
     "ingredients": [
-      {"solution_name": "LiPF6_1M", "volume_ul": 20},
-      {"solution_name": "EC_DMC_1to1", "volume_ul": 30}
+      {"solution_name": "ZnSO4_1M_water", "volume_ul": 20},
+      {"solution_name": "ZnCl2_1M_water", "volume_ul": 30}
     ]
   },
   {
     "recipe_name": "variant_cell_02",
     "electrolyte_volume_ul": 50,
     "ingredients": [
-      {"solution_name": "LiPF6_1M", "volume_ul": 25},
-      {"solution_name": "EC_DMC_1to1", "volume_ul": 25}
+      {"solution_name": "ZnSO4_1M_water", "volume_ul": 25},
+      {"solution_name": "ZnCl2_1M_water", "volume_ul": 25}
     ]
   }
 ]

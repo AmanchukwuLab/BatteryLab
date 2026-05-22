@@ -34,9 +34,11 @@ def _resolve_required_volumes(
     if not request.ingredients:
         return required_by_solution
 
-    is_weight_recipe = request.ingredients[0].weight_percent is not None
+    is_weight_recipe = request.ingredients[0].weight_percent is not None # When constructing a recipe, 
+    #      it's ensured that all ingredients are consistently weight-based or volume-based, so we can 
+    #      check the first one to determine the mode.
 
-    if not is_weight_recipe:
+    if not is_weight_recipe: # Volume recipe
         for ingredient in request.ingredients:
             ingredient_volume = ingredient.volume_ul or 0.0
             required_by_solution[ingredient.solution_name] = (
@@ -47,7 +49,7 @@ def _resolve_required_volumes(
 
     # Weight-percent to volume conversion from target total volume using densities.
     # For each ingredient i: v_i = V_total * (w_i/rho_i) / sum_j(w_j/rho_j)
-    target_volume_ml = (request.target_total_volume_ul or 0.0) / 1000.0
+    target_volume_ml = (request.electrolyte_volume_ul or 0.0) / 1000.0
     weight_over_density = []
     for ingredient in request.ingredients:
         density = inventory.density_for_solution(ingredient.solution_name)
@@ -119,7 +121,9 @@ def _consume_solution_from_vials(
             # Preserve history to support cleaning/reuse decisions.
             vial.previous_solution_name = vial.current_solution_name
             vial.current_solution_name = None
-            vial.current_solution_density_g_per_ml = None
+            # Keep density field populated even when the vial is emptied to
+            # satisfy model constraints requiring a density for every vial.
+            # The value will typically be overwritten when the vial is reassigned.
 
     return usage_records
 
