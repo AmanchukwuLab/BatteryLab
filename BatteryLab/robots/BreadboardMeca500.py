@@ -19,6 +19,9 @@ class BreadBoardMeca500(Meca500):
         / "configs"
         / "CrimperPositions.yaml",
     ):
+        self.crimper_robot_constants_config_file = Path(
+            crimper_robot_constants_config_file
+        )
         super().__init__(
             logger,
             log_path,
@@ -27,13 +30,23 @@ class BreadBoardMeca500(Meca500):
             robot_constants_config_file,
         )
         try:
-            with open(crimper_robot_constants_config_file, "r") as file:
+            with open(self.crimper_robot_constants_config_file, "r") as file:
                 yaml_data = yaml.safe_load(file)
                 self.crimperRobotConstants = CrimperRobotConstants(**yaml_data)
         except Exception as e:
             self.logger.error("Cannot load the crimper robot constants: ", e)
             print("Program will exit because it cannot load crimper robot constants")
             exit()
+
+    def reload_crimper_position_config(self):
+        with open(self.crimper_robot_constants_config_file, "r") as file:
+            yaml_data = yaml.safe_load(file) or {}
+        self.crimperRobotConstants = CrimperRobotConstants(**yaml_data)
+
+    def save_crimper_position_config(self):
+        payload = self.crimperRobotConstants.model_dump()
+        with open(self.crimper_robot_constants_config_file, "w") as file:
+            yaml.safe_dump(payload, file, sort_keys=False)
 
     def setup_for_pick_up(self):
         self.robot.SetTrf(*self.crimperRobotConstants.TRF)
