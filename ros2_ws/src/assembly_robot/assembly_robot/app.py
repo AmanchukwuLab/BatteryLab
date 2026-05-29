@@ -52,6 +52,21 @@ def _tip_index_to_coordinates(tip_index: int) -> tuple[int, int]:
     return x, y
 
 
+def _tip_index_for_substance_or_raise(
+    tip_rack: TipRack, substance_name: Optional[str]
+) -> int:
+    tip_index = tip_rack.find_clean_tip_for_substance(substance_name)
+    if tip_index is not None:
+        return tip_index
+
+    if substance_name is None:
+        raise RuntimeError("No clean pipette tips are available for this batch.")
+
+    raise RuntimeError(
+        f"No clean pipette tips are available for substance '{substance_name}' without contamination."
+    )
+
+
 def _load_recipes_file(recipe_path: Path) -> list[dict]:
     with recipe_path.open("r", encoding="utf-8") as handle:
         raw_payload = json.load(handle)
@@ -133,6 +148,135 @@ def _assess_batch_requirements(recipes: list[dict], inventory: Inventory) -> tup
             deficits[sol] = req - avail
 
     return required_by_solution, deficits
+
+
+def _recipe_tip_sequence(recipe: dict) -> list[Optional[str]]:
+    """Generate a sequence of solution names for a recipe that reflects the order in which tips would be used"""
+    ingredients = recipe.get("ingredients") or []
+    if not ingredients:
+        return [None]
+
+    sequence: list[Optional[str]] = []
+    seen: set[Optional[str]] = set()
+    for ingredient in ingredients:
+        substance_name = ingredient.get("solution_name")
+        if substance_name is None:
+            raise ValueError("Ingredient missing solution_name")
+        if substance_name not in seen:
+            sequence.append(substance_name)
+            seen.add(substance_name)
+    return sequence
+
+
+def _assess_batch_tip_requirements(recipes: list[dict], tip_rack: TipRack) -> tuple[int, int]:
+    """Return (additional_clean_tips_needed, current_clean_tips)."""
+
+    clean_tip_count = sum(1 for tip in tip_rack.tips if tip.current_substance_name is None)
+    assigned_substances = {
+        tip.current_substance_name for tip in tip_rack.tips if tip.current_substance_name is not None
+    }
+    additional_clean_tips_needed = 0
+
+    for recipe in recipes:
+        for substance_name in _recipe_tip_sequence(recipe):
+            if substance_name is None:
+                if clean_tip_count <= 0:
+                    additional_clean_tips_needed += 1
+                    clean_tip_count += 1
+                continue
+
+            if substance_name in assigned_substances:
+                continue
+
+            if clean_tip_count <= 0:
+                additional_clean_tips_needed += 1
+                clean_tip_count += 1
+
+            clean_tip_count -= 1
+            assigned_substances.add(substance_name)
+
+    return additional_clean_tips_needed, clean_tip_count
+
+
+def _recipe_metadata_snapshot(recipe: dict) -> dict:
+    ingredients = []
+    for ingredient in recipe.get("ingredients") or []:
+        if not isinstance(ingredient, dict):
+            raise ValueError("Recipe ingredient entries must be JSON objects")
+        ingredients.append(dict(ingredient))
+
+    total_volume_ul = recipe.get("electrolyte_volume_ul")
+    if total_volume_ul is not None:
+        total_volume_ul = float(total_volume_ul)
+
+    return {
+        "recipe_name": str(recipe.get("recipe_name", "")).strip(),
+        "electrolyte_volume_ul": total_volume_ul,
+        "ingredients": ingredients,
+    }
+
+
+def _prompt_batch_component_metadata(component_order: Sequence[Components]) -> dict:
+    print("Enter the component details for this batch campaign. Leave a field blank to skip it.")
+    metadata: dict[str, dict[str, str]] = {}
+    for component in component_order:
+        details = input(
+            f"{component.name} details (material / lot / supplier / notes): "
+        ).strip()
+        metadata[component.name] = {"details": details}
+    return metadata
+
+
+def _batch_component_metadata_path() -> Path:
+    return Path(__file__).resolve().parents[4] / "metadata" / "last_batch_component_metadata.json"
+
+
+def _load_last_batch_component_metadata() -> Optional[dict]:
+    metadata_path = _batch_component_metadata_path()
+    if not metadata_path.exists():
+        return None
+
+    with metadata_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("Stored batch component metadata must be a JSON object")
+    return payload
+
+
+def _save_last_batch_component_metadata(metadata: dict) -> None:
+    metadata_path = _batch_component_metadata_path()
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    with metadata_path.open("w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
+def _prompt_batch_component_metadata_with_reuse(component_order: Sequence[Components]) -> dict:
+    last_metadata = None
+    try:
+        last_metadata = _load_last_batch_component_metadata()
+    except Exception as e:
+        print(f"Warning: could not load last-used batch component metadata: {e}")
+
+    if last_metadata is not None:
+        while True:
+            print("Last-used batch component metadata:")
+            print(json.dumps(last_metadata, indent=2, sort_keys=True))
+            confirm = input(
+                'Type exactly "yEs!" to reuse this metadata, or type "new" to enter new data: '
+            ).strip()
+            if confirm == "yEs!":
+                return last_metadata
+            if confirm.lower() in {"n", "ne", "new"}:
+                break
+            print('Please type exactly "yEs!" to reuse, or "new" to enter new data.')
+
+    metadata = _prompt_batch_component_metadata(component_order)
+    try:
+        _save_last_batch_component_metadata(metadata)
+    except Exception as e:
+        print(f"Warning: failed to save last-used batch component metadata: {e}")
+    return metadata
 
 
 def _simulate_recipe_execution(recipe: dict, inventory: Inventory) -> None:
@@ -245,11 +389,7 @@ def _simulate_recipe_execution_with_movements(recipe: dict, inventory: Inventory
             
             # Get a new tip for the new substance
             current_substance = instr_substance
-            tip_index = tip_rack.find_clean_tip_for_substance(current_substance)
-            if tip_index is None:
-                tip_index = tip_rack.find_clean_tip_for_substance(None)
-            if tip_index is None:
-                tip_index = 0  # Force use of first tip if none are clean
+            tip_index = _tip_index_for_substance_or_raise(tip_rack, current_substance)
             
             tip_x, tip_y = _tip_index_to_coordinates(tip_index)
             print(f"  Acquiring tip {tip_index} at ({tip_x}, {tip_y}) for substance '{current_substance}'")
@@ -294,13 +434,11 @@ class BatterySessionTracker:
     LARGE_ADJUSTMENT_MAD_MULTIPLIER = 3.0
 
     def __init__(self, session_root: Path):
-        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_dir = session_root / f"session_{self.session_id}"
-        self.lookup_image_dir = self.session_dir / "lookup_images"
-        self.session_dir.mkdir(parents=True, exist_ok=True)
-        self.lookup_image_dir.mkdir(parents=True, exist_ok=True)
-
-        self.records_path = self.session_dir / "battery_records.csv"
+        self.session_root = session_root
+        self.session_id: Optional[str] = None
+        self.session_dir: Optional[Path] = None
+        self.lookup_image_dir: Optional[Path] = None
+        self.records_path: Optional[Path] = None
         self._battery_records = []
         self._battery_index = 0
         self._component_adjust_history = {}
@@ -324,7 +462,8 @@ class BatterySessionTracker:
             "recipe_sequence_index",
             "recipe_name",
             "recipe_total_volume_ul",
-            "recipe_payload_json",
+            "recipe_snapshot_json",
+            "batch_component_metadata_json",
         ]
         for component in self.component_order:
             slug = _component_slug(component.name)
@@ -338,14 +477,37 @@ class BatterySessionTracker:
                 ]
             )
             self._component_adjust_history[slug] = {"dx": [], "dy": []}
-        self._flush()
+
+    def _initialize_session_storage(self):
+        if self.session_dir is not None:
+            return
+
+        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.session_dir = self.session_root / f"session_{self.session_id}"
+        self.lookup_image_dir = self.session_dir / "images"
+
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        self.lookup_image_dir.mkdir(parents=True, exist_ok=True)
+        self.records_path = self.session_dir / "battery_records.csv"
+
+    def _require_session_storage(self):
+        if (
+            self.session_id is None
+            or self.session_dir is None
+            or self.lookup_image_dir is None
+            or self.records_path is None
+        ):
+            raise RuntimeError("Battery session storage has not been initialized yet.")
 
     def start_battery(
         self,
         recipe: Optional[dict] = None,
         recipe_index: Optional[int] = None,
         recipe_source_path: Optional[str] = None,
+        batch_component_metadata: Optional[dict] = None,
     ):
+        self._initialize_session_storage()
+        self._require_session_storage()
         self._battery_index += 1
         record = {
             "battery_id": self._battery_index,
@@ -357,14 +519,20 @@ class BatterySessionTracker:
             "recipe_sequence_index": "" if recipe_index is None else str(recipe_index),
             "recipe_name": "",
             "recipe_total_volume_ul": "",
-            "recipe_payload_json": "",
+            "recipe_snapshot_json": "",
+            "batch_component_metadata_json": "",
         }
         if recipe is not None:
-            record["recipe_name"] = str(recipe.get("recipe_name", "")).strip()
-            recipe_total_volume = recipe.get("electrolyte_volume_ul")
-            if recipe_total_volume is not None:
-                record["recipe_total_volume_ul"] = str(recipe_total_volume)
-            record["recipe_payload_json"] = json.dumps(recipe, sort_keys=True)
+            recipe_snapshot = _recipe_metadata_snapshot(recipe)
+            record["recipe_name"] = recipe_snapshot["recipe_name"]
+            if recipe_snapshot["electrolyte_volume_ul"] is not None:
+                record["recipe_total_volume_ul"] = str(recipe_snapshot["electrolyte_volume_ul"])
+            record["recipe_snapshot_json"] = json.dumps(recipe_snapshot, sort_keys=True)
+        if batch_component_metadata is not None:
+            record["batch_component_metadata_json"] = json.dumps(
+                batch_component_metadata,
+                sort_keys=True,
+            )
         for component in self.component_order:
             slug = _component_slug(component.name)
             record[f"{slug}_dx"] = ""
@@ -434,6 +602,7 @@ class BatterySessionTracker:
         if should_capture:
             lookup_image = result.get("lookup_image")
             if lookup_image is not None:
+                self._require_session_storage()
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                 filename = (
                     self.lookup_image_dir
@@ -451,11 +620,13 @@ class BatterySessionTracker:
         self._flush()
 
     def finish_battery(self, battery_record: dict, status: str):
+        self._require_session_storage()
         battery_record["battery_end_time"] = datetime.now().isoformat(timespec="seconds")
         battery_record["battery_status"] = status
         self._flush()
 
     def _flush(self):
+        self._require_session_storage()
         with open(self.records_path, "w", newline="") as csv_file:
             writer = csv.DictWriter(csv_file, fieldnames=self.fieldnames)
             writer.writeheader()
@@ -467,9 +638,9 @@ class AutoBatteryLab(Node):
     def __init__(self):
         super().__init__("auto_battery_lab")
         logger = self.get_logger()
-        session_root = Path(__file__).resolve().parents[4] / "images" / "battery_sessions"
+        session_root = Path(__file__).resolve().parents[4] / "metadata"
         self.session_tracker = BatterySessionTracker(session_root)
-        logger.info(f"Battery session records will be stored in {self.session_tracker.session_dir}")
+        logger.info("Battery session metadata will be created only when a full battery run starts.")
         # Initialize the Assembly Robot
         self.assembly_robot = AssemblyRobot(
             logger=logger, robot_address="192.168.0.100"
@@ -509,6 +680,7 @@ class AutoBatteryLab(Node):
         self,
         recipes: Sequence[dict],
         recipe_source_path: Optional[str] = None,
+        batch_component_metadata: Optional[dict] = None,
     ):
         if not recipes:
             raise ValueError("recipes file did not contain any cells to assemble")
@@ -540,6 +712,7 @@ class AutoBatteryLab(Node):
                 recipe=recipe,
                 recipe_index=recipe_index,
                 recipe_source_path=recipe_source_path,
+                batch_component_metadata=batch_component_metadata,
             )
 
     def put_a_component_on_assembly_post(
@@ -591,11 +764,13 @@ class AutoBatteryLab(Node):
         recipe: Optional[dict] = None,
         recipe_index: Optional[int] = None,
         recipe_source_path: Optional[str] = None,
+        batch_component_metadata: Optional[dict] = None,
     ):
         battery_record = self.session_tracker.start_battery(
             recipe=recipe,
             recipe_index=recipe_index,
             recipe_source_path=recipe_source_path,
+            batch_component_metadata=batch_component_metadata,
         )
         # Prepare all the robots and home them
         try:
@@ -650,10 +825,7 @@ class AutoBatteryLab(Node):
                 if recipe is None or not recipe.get("ingredients"):
                     # Fall back to single-volume dispense
                     volume_to_get = self._electrolyte_volume_for_recipe(recipe)
-                    # Try to find a clean tip; if none, use first tip and mark as used
-                    tip_index = tip_rack.find_clean_tip_for_substance(None)
-                    if tip_index is None:
-                        tip_index = 0  # Force use of first tip if none are clean
+                    tip_index = _tip_index_for_substance_or_raise(tip_rack, None)
                     tip_x, tip_y = _tip_index_to_coordinates(tip_index)
                     
                     self.liquid_robot.MG400.get_tip(tip_x, tip_y)
@@ -700,11 +872,7 @@ class AutoBatteryLab(Node):
                             
                             # Get a new tip for the new substance
                             current_substance = instr_substance
-                            tip_index = tip_rack.find_clean_tip_for_substance(current_substance)
-                            if tip_index is None:
-                                tip_index = tip_rack.find_clean_tip_for_substance(None)
-                            if tip_index is None:
-                                tip_index = 0  # Force use of first tip if none are clean
+                            tip_index = _tip_index_for_substance_or_raise(tip_rack, current_substance)
                             
                             tip_x, tip_y = _tip_index_to_coordinates(tip_index)
                             self.liquid_robot.MG400.get_tip(tip_x, tip_y)
@@ -1140,6 +1308,13 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
             print(f"Failed to assess recipes: {e}")
             return
 
+        try:
+            tip_rack = load_tip_rack_state()
+            additional_tips_needed, clean_tip_count = _assess_batch_tip_requirements(recipes, tip_rack)
+        except Exception as e:
+            print(f"Failed to assess pipette tip requirements: {e}")
+            return
+
         if required:
             print("Aggregated chemical requirements for this batch:")
             for sol, vol in required.items():
@@ -1149,6 +1324,15 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
                 print(f" - {sol}: required {vol:.1f} uL, available {avail:.1f} uL -> {status}")
         else:
             print("No ingredient-based requirements detected in recipes; proceeding with volume-only dispenses.")
+
+        print(
+            f"Pipette tips available: {clean_tip_count} clean tip(s) on the loaded rack; "
+            f"additional clean tip(s) needed for this batch: {additional_tips_needed}"
+        )
+        if additional_tips_needed > 0:
+            print(
+                "TIP DEFICIT: the current tip rack does not have enough clean tips to finish this batch without contamination."
+            )
         # Offer test/dry-run and movement-simulation options
         action = input(
             "Choose action: [T]est recipes (simulate text), [M]ovements (simulate MG400 movements), [A]ssemble now, [C]ancel (default C): "
@@ -1191,9 +1375,13 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
                 print("Canceled after movement-simulation.")
                 return
         if action == "a":
+            batch_component_metadata = _prompt_batch_component_metadata_with_reuse(
+                batterylab.session_tracker.component_order
+            )
             batterylab.assemble_batteries_in_series(
                 recipes,
                 recipe_source_path=str(recipe_file.resolve()),
+                batch_component_metadata=batch_component_metadata,
             )
         else:
             print("Canceled.")

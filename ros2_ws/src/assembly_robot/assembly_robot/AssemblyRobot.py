@@ -688,11 +688,14 @@ class AssemblyRobot(Node):
                 self.rail_meca500.robot.MoveLin(*base_pose)
                 self.rail_meca500.robot.WaitIdle(10)
                 return base_pose
+            # Always approach tray wells from an elevated pose first, then descend.
             self.manual_adjustment(
-                rail_position, base_position, level=level, component_name=component_name
+                rail_position, base_position, level=1.0, component_name=component_name
             )
             base_pose = list(base_position)
             base_pose[2] = base_position[2] + 30 * level
+            self.rail_meca500.robot.MoveLin(*base_pose)
+            self.rail_meca500.robot.WaitIdle(10)
             return base_pose
 
         # If moving to the lookup camera or pedestal, use the midpoint move
@@ -729,7 +732,6 @@ class AssemblyRobot(Node):
         skip_prep: bool = False,
     ):
         """Enter keyboard-based manual arm control for fine-tuning a single pose."""
-        # Move to the user-selected base pose
         current_pose = self._move_to_manual_base_pose(
             rail_position=rail_position,
             base_position=base_position,
@@ -748,9 +750,18 @@ class AssemblyRobot(Node):
         max_step = 5.0
         step_size = max(min_step, min(max_step, step_size))
         helper_text = (
-            "Manual arm control mode started. Keys: Up(-x), Down(+x), Right(+y), Left(-y), "
-            "u(+z), d(-z), p(print), o(return to base), h(help), space(pause), r(resume), +(bigger step), "
-            "-(smaller step), i(set step), v(toggle suction), q(quit)."
+            """
+            
+=====================================================
+Manual arm control mode initiated. Controls: 
+-----------------------------------------------------
+Up(-x), Down(+x), Right(+y), Left(-y), u(+z), d(-z), 
+p(print), o(return to base), h(help), space(pause), 
+r(resume), +(bigger step), -(smaller step), 
+i(input set step), v(toggle suction), q(quit).
+=====================================================
+
+"""
         )
         self.logger.info(
             helper_text
