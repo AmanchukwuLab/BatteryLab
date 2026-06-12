@@ -30,8 +30,8 @@ def format_vial_statuses(
     rows = []
     for vial in sorted(inventory.vials, key=lambda item: (item.x_ind, item.y_ind)):
         status = _status_label(vial, empty_threshold_ul)
-        current_name = vial.current_solution_name or "-"
-        previous_name = vial.previous_solution_name or "-"
+        current_name = vial.current_electrolyte.name if vial.current_electrolyte else "-"
+        previous_name = vial.previous_electrolyte.name if vial.previous_electrolyte else "-"
         rows.append(
             {
                 "x_ind": str(vial.x_ind),

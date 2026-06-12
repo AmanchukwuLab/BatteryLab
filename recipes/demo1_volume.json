@@ -1,18 +1,30 @@
 [
   {
-    "recipe_name": "demo_volume_cell_00",
-    "electrolyte_volume_ul": 50,
-    "ingredients": [
-      {"solution_name": "ZnSO4_1M_water", "volume_ul": 20},
-      {"solution_name": "ZnCl2_1M_water", "volume_ul": 30}
-    ]
-  },
-  {
-    "recipe_name": "demo_volume_cell_01",
-    "electrolyte_volume_ul": 50,
-    "ingredients": [
-      {"solution_name": "ZnSO4_1M_water", "volume_ul": 25},
-      {"solution_name": "ZnCl2_1M_water", "volume_ul": 25}
+    "recipe_name": "demo_mix_cell_00",
+    "destination": "mix_vessel",
+    "target_electrolyte": {
+      "name": "demo_mix_cell_00_target",
+      "volume": 0.05,
+      "v": {
+        "water": 0.5,
+        "ethanol": 0.5
+      }
+    },
+    "available_electrolytes": [
+      {
+        "name": "water_stock",
+        "volume": 0.15,
+        "v": {
+          "water": 1.0
+        }
+      },
+      {
+        "name": "ethanol_stock",
+        "volume": 0.15,
+        "v": {
+          "ethanol": 1.0
+        }
+      }
     ]
   }
 ]

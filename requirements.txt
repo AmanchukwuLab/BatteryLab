@@ -10,3 +10,5 @@ rosdep
 lark
 empy==3.3.4
 matplotlib
+pulp
+numpy

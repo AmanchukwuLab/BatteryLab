@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .models import Inventory, VialContents
+from .models import ElectrolyteSpec, Inventory, VialContents
 
 
 def _to_inventory(inventory_data: Inventory | dict) -> Inventory:
@@ -18,33 +18,26 @@ def _find_vial(inventory: Inventory, x_ind: int, y_ind: int) -> Optional[VialCon
     return None
 
 
+def _to_electrolyte(electrolyte_data: ElectrolyteSpec | dict) -> ElectrolyteSpec:
+    return electrolyte_data if isinstance(electrolyte_data, ElectrolyteSpec) else ElectrolyteSpec(**electrolyte_data)
+
+
 def set_vial_contents(
     inventory_data: Inventory | dict,
     x_ind: int,
     y_ind: int,
-    solution_name: str,
+    electrolyte: ElectrolyteSpec | dict,
     volume_ul: float,
-    density_g_per_ml: float,
     *,
     create_if_missing: bool = True,
 ) -> Inventory:
-    """Set or replace the solution assignment for a vial.
-
-    Behavior:
-    - If the vial exists, update its current solution/volume/density.
-    - If the solution changes, preserve the old value in previous_solution_name.
-    - If the vial does not exist, optionally create it.
-    """
+    """Set or replace the electrolyte assignment for a vial."""
 
     inventory = _to_inventory(inventory_data)
-    solution_name = solution_name.strip()
+    electrolyte_spec = _to_electrolyte(electrolyte)
 
     if x_ind < 0 or y_ind < 0:
         raise ValueError("x_ind and y_ind must be >= 0")
-    if not solution_name:
-        raise ValueError("solution_name must not be empty")
-    if density_g_per_ml <= 0:
-        raise ValueError("density_g_per_ml must be > 0")
 
     target = _find_vial(inventory, x_ind, y_ind)
     if target is None:
@@ -54,19 +47,17 @@ def set_vial_contents(
             VialContents(
                 x_ind=x_ind,
                 y_ind=y_ind,
-                current_solution_name=solution_name,
-                previous_solution_name=None,
-                current_solution_density_g_per_ml=density_g_per_ml,
+                current_electrolyte=electrolyte_spec,
+                previous_electrolyte=None,
                 volume_ul=volume_ul,
             )
         )
         return inventory
 
-    if target.current_solution_name and target.current_solution_name != solution_name:
-        target.previous_solution_name = target.current_solution_name
+    if target.current_electrolyte and target.current_electrolyte.name != electrolyte_spec.name:
+        target.previous_electrolyte = target.current_electrolyte
 
-    target.current_solution_name = solution_name
-    target.current_solution_density_g_per_ml = density_g_per_ml
+    target.current_electrolyte = electrolyte_spec
     target.volume_ul = volume_ul
 
     # Re-validate constraints by round-tripping through model parsing.
@@ -84,11 +75,9 @@ def clear_vial(inventory_data: Inventory | dict, x_ind: int, y_ind: int) -> Inve
     if target is None:
         raise KeyError(f"vial coordinates not found: x_ind={x_ind}, y_ind={y_ind}")
 
-    if target.current_solution_name:
-        target.previous_solution_name = target.current_solution_name
-    target.current_solution_name = None
-    # When clearing a vial, keep a valid density value to satisfy the model; use 1.0 as a neutral placeholder.
-    target.current_solution_density_g_per_ml = 1.0
+    if target.current_electrolyte:
+        target.previous_electrolyte = target.current_electrolyte
+    target.current_electrolyte = None
     target.volume_ul = 0.0
 
     return Inventory(**(inventory.model_dump() if hasattr(inventory, "model_dump") else inventory.dict()))

@@ -1,10 +1,12 @@
-"""Pydantic models (essentially unique data structures and containers) for electrolyte inventory and formulation plans."""
+"""Pydantic models for electrolyte inventory and formulation plans."""
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, validator
+
+from solvency.core import Electrolyte
 
 VIAL_MAX_VOLUME_UL = 1500.0
 DEFAULT_BATTERY_ELECTROLYTE_UL = 60.0
@@ -12,41 +14,55 @@ DEFAULT_LOW_VOLUME_THRESHOLD_UL = 2 * DEFAULT_BATTERY_ELECTROLYTE_UL
 DEFAULT_EMPTY_VOLUME_THRESHOLD_UL = 30.0
 
 
-class IngredientRequirement(BaseModel):
-    """A required stock solution by volume or weight percent."""
+class ElectrolyteSpec(BaseModel):
+    """A solvency-style electrolyte description."""
 
-    solution_name: str = Field(..., min_length=1)
-    volume_ul: Optional[float] = Field(default=None, gt=0)
-    weight_percent: Optional[float] = Field(default=None, gt=0, le=100)
+    name: str = Field(..., min_length=1)
+    volume: Optional[float] = Field(default=None, gt=0)
+    v: Dict[str, float] = Field(default_factory=dict)
+    s: Dict[str, float] = Field(default_factory=dict)
+    a: Dict[str, float] = Field(default_factory=dict)
+    local_smiles: Optional[Dict[str, str]] = None
+    use_pubchem: bool = False
 
-    @validator("solution_name")
-    def _strip_solution_name(cls, value: str) -> str:
+    @validator("name")
+    def _strip_name(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("must not be empty")
         return value
 
-    @validator("weight_percent", always=True)
-    def _validate_weight_or_volume(
-        cls, value: Optional[float], values: dict
-    ) -> Optional[float]:
-        volume_ul = values.get("volume_ul")
-        has_volume = volume_ul is not None
-        has_weight_percent = value is not None
-        if has_volume == has_weight_percent:
-            raise ValueError("exactly one of volume_ul or weight_percent must be set")
-        if value is None:
-            return None
-        return float(value)
+    def to_solvency(self) -> Electrolyte:
+        return Electrolyte(
+            name=self.name,
+            volume=self.volume,
+            v=dict(self.v),
+            s=dict(self.s),
+            a=dict(self.a),
+            local_smiles=dict(self.local_smiles or {}),
+            use_pubchem=self.use_pubchem,
+        )
+
+    @classmethod
+    def from_solvency(cls, electrolyte: Electrolyte) -> "ElectrolyteSpec":
+        return cls(
+            name=electrolyte.name,
+            volume=electrolyte.volume,
+            v=dict(electrolyte.v),
+            s=dict(electrolyte.s),
+            a=dict(electrolyte.a),
+            local_smiles=dict(getattr(electrolyte, "_local_smiles", {}) or {}),
+            use_pubchem=bool(getattr(electrolyte, "_use_pubchem", False)),
+        )
 
 
 class FormulationRequest(BaseModel):
-    """A recipe request for a target mix."""
+    """A recipe request written in solvency Electrolyte format."""
 
     recipe_name: str = Field(..., min_length=1)
     destination: str = Field(default="mix_vessel", min_length=1)
-    electrolyte_volume_ul: Optional[float] = Field(default=None, gt=0)
-    ingredients: List[IngredientRequirement] = Field(default_factory=list)
+    target_electrolyte: ElectrolyteSpec
+    available_electrolytes: List[ElectrolyteSpec] = Field(default_factory=list)
 
     @validator("recipe_name", "destination")
     def _strip_text(cls, value: str) -> str:
@@ -54,29 +70,6 @@ class FormulationRequest(BaseModel):
         if not value:
             raise ValueError("must not be empty")
         return value
-
-    @validator("ingredients")
-    def _validate_ingredient_modes(
-        cls, ingredients: List[IngredientRequirement], values: dict
-    ) -> List[IngredientRequirement]:
-        if not ingredients:
-            return ingredients
-
-        has_weight = any(item.weight_percent is not None for item in ingredients)
-        has_volume = any(item.volume_ul is not None for item in ingredients)
-        if has_weight and has_volume:
-            raise ValueError("ingredients must be all volume-based or all weight-percent-based")
-
-        electrolyte_volume_ul = values.get("electrolyte_volume_ul")
-        if has_weight and electrolyte_volume_ul is None:
-            raise ValueError("electrolyte_volume_ul is required for weight-percent recipes")
-
-        if has_weight:
-            total_wt_percent = sum(item.weight_percent or 0.0 for item in ingredients)
-            if abs(total_wt_percent - 100.0) > 1e-6:
-                raise ValueError("weight_percent values must sum to 100")
-
-        return ingredients
 
 
 class TransferInstruction(BaseModel):
@@ -103,25 +96,11 @@ class VialContents(BaseModel):
 
     x_ind: int = Field(..., ge=0)
     y_ind: int = Field(..., ge=0)
-    current_solution_name: Optional[str] = None
-    previous_solution_name: Optional[str] = None
-    current_solution_density_g_per_ml: float = Field(..., gt=0)
+    current_electrolyte: Optional[ElectrolyteSpec] = None
+    previous_electrolyte: Optional[ElectrolyteSpec] = None
     volume_ul: float = Field(..., ge=0, le=VIAL_MAX_VOLUME_UL)
     capacity_ul: float = Field(default=VIAL_MAX_VOLUME_UL, gt=0, le=VIAL_MAX_VOLUME_UL)
     low_volume_threshold_ul: float = Field(default=DEFAULT_LOW_VOLUME_THRESHOLD_UL, ge=0)
-
-    @validator("current_solution_name", "previous_solution_name", pre=True)
-    def _normalize_optional_solution(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        value = value.strip()
-        return value or None
-
-    @validator("current_solution_density_g_per_ml")
-    def _validate_density_positive(cls, density: float) -> float:
-        if density is None or density <= 0:
-            raise ValueError("current_solution_density_g_per_ml must be provided and > 0 for every vial")
-        return density
 
     @validator("low_volume_threshold_ul")
     def _check_threshold(cls, value: float, values: dict) -> float:
@@ -130,14 +109,19 @@ class VialContents(BaseModel):
             raise ValueError("low_volume_threshold_ul must be <= capacity_ul")
         return value
 
+    def electrolyte_name(self) -> Optional[str]:
+        if self.current_electrolyte is None:
+            return None
+        return self.current_electrolyte.name
+
 
 class VialAlert(BaseModel):
     """Machine-readable alert for a vial nearing depletion."""
 
     x_ind: int = Field(..., ge=0)
     y_ind: int = Field(..., ge=0)
-    current_solution_name: Optional[str] = None
-    previous_solution_name: Optional[str] = None
+    current_electrolyte: Optional[ElectrolyteSpec] = None
+    previous_electrolyte: Optional[ElectrolyteSpec] = None
     remaining_volume_ul: float = Field(..., ge=0)
     low_volume_flag: bool
     empty_or_unusable_flag: bool
@@ -289,30 +273,22 @@ class Inventory(BaseModel):
             seen.add(key)
         return vials
 
-    def available_volume(self, solution_name: str) -> float:
+    def available_volume(self, electrolyte_name: str) -> float:
         return sum(
             vial.volume_ul
             for vial in self.vials
-            if vial.current_solution_name == solution_name
+            if vial.current_electrolyte is not None and vial.current_electrolyte.name == electrolyte_name
         )
 
-    def vials_for_solution(self, solution_name: str) -> List[VialContents]:
+    def vials_for_solution(self, electrolyte_name: str) -> List[VialContents]:
         return [
-            vial for vial in self.vials if vial.current_solution_name == solution_name
+            vial
+            for vial in self.vials
+            if vial.current_electrolyte is not None and vial.current_electrolyte.name == electrolyte_name
         ]
 
-    def density_for_solution(self, solution_name: str) -> float:
-        matching = self.vials_for_solution(solution_name)
-        if not matching:
-            raise KeyError(f"No vial found for solution: {solution_name}")
-
-        densities = {vial.current_solution_density_g_per_ml for vial in matching}
-        if None in densities:
-            raise ValueError(
-                f"Density missing on one or more vials for solution: {solution_name}"
-            )
-        if len(densities) != 1:
-            raise ValueError(
-                f"Inconsistent densities across vials for solution: {solution_name}"
-            )
-        return list(densities)[0]  # guaranteed single item
+    def solution_at(self, x_ind: int, y_ind: int) -> Optional[str]:
+        for vial in self.vials:
+            if vial.x_ind == x_ind and vial.y_ind == y_ind:
+                return vial.electrolyte_name()
+        raise KeyError(f"No vial found at coordinates: x_ind={x_ind}, y_ind={y_ind}")
