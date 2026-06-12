@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Dict, List, Sequence
 
-from BatteryLab_files.BatteryLab.BatteryLab.solvency.core import Electrolyte, e_solver
+from .. import solvency
+Electrolyte = solvency.core.Electrolyte
+e_solver = solvency.core.e_solver
 
 from .models import (
     DEFAULT_EMPTY_VOLUME_THRESHOLD_UL,

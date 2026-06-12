@@ -7,7 +7,8 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field, validator
 
 # import Electrolyte model from solvency
-from solvency import Electrolyte
+from .. import solvency
+Electrolyte = solvency.core.Electrolyte
 
 VIAL_MAX_VOLUME_UL = 1500.0
 DEFAULT_BATTERY_ELECTROLYTE_UL = 60.0
