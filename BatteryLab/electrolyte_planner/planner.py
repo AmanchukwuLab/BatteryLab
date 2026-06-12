@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, List, Sequence
 
+from solvency.core import Electrolyte, e_solver
+
 from .models import (
     DEFAULT_EMPTY_VOLUME_THRESHOLD_UL,
     FeasibilityIssue,
@@ -27,46 +29,44 @@ def _sort_vials(vials: Sequence[VialContents]) -> List[VialContents]:
     return sorted(vials, key=lambda item: (item.x_ind, item.y_ind))
 
 
+def _build_solvency_bank(inventory: Inventory, request: FormulationRequest) -> List[Electrolyte]:
+    bank: List[Electrolyte] = []
+    for stock in request.available_electrolytes:
+        available_volume_ml = inventory.available_volume(stock.name) / 1000.0
+        bank.append(
+            Electrolyte(
+                name=stock.name,
+                volume=available_volume_ml or 1.0,
+                v=dict(stock.v),
+                s=dict(stock.s),
+                a=dict(stock.a),
+                local_smiles=dict(stock.local_smiles or {}),
+                use_pubchem=stock.use_pubchem,
+            )
+        )
+    return bank
+
+
+def _resolve_solvency_required_volumes(
+    inventory: Inventory, request: FormulationRequest
+) -> Dict[str, float]:
+    bank = _build_solvency_bank(inventory, request)
+    if not bank:
+        raise ValueError("available_electrolytes did not match any configured stock solutions")
+
+    target = request.target_electrolyte.to_solvency()
+
+    solution = e_solver(bank, target)
+    required_by_solution: Dict[str, float] = {}
+    for solution_name, fraction in solution.items():
+        required_by_solution[solution_name] = fraction * (request.target_electrolyte.volume or 0.0) * 1000.0
+    return required_by_solution
+
+
 def _resolve_required_volumes(
     inventory: Inventory, request: FormulationRequest
 ) -> Dict[str, float]:
-    required_by_solution: Dict[str, float] = {}
-    if not request.ingredients:
-        return required_by_solution
-
-    is_weight_recipe = request.ingredients[0].weight_percent is not None # When constructing a recipe, 
-    #      it's ensured that all ingredients are consistently weight-based or volume-based, so we can 
-    #      check the first one to determine the mode.
-
-    if not is_weight_recipe: # Volume recipe
-        for ingredient in request.ingredients:
-            ingredient_volume = ingredient.volume_ul or 0.0
-            required_by_solution[ingredient.solution_name] = (
-                required_by_solution.get(ingredient.solution_name, 0.0)
-                + ingredient_volume
-            )
-        return required_by_solution
-
-    # Weight-percent to volume conversion from target total volume using densities.
-    # For each ingredient i: v_i = V_total * (w_i/rho_i) / sum_j(w_j/rho_j)
-    target_volume_ml = (request.electrolyte_volume_ul or 0.0) / 1000.0
-    weight_over_density = []
-    for ingredient in request.ingredients:
-        density = inventory.density_for_solution(ingredient.solution_name)
-        weight_fraction = (ingredient.weight_percent or 0.0) / 100.0
-        weight_over_density.append((ingredient.solution_name, weight_fraction / density))
-
-    denominator = sum(item[1] for item in weight_over_density)
-    if denominator <= 0:
-        raise ValueError("Invalid weight_percent/density combination for conversion")
-
-    for solution_name, term in weight_over_density:
-        ingredient_volume_ul = (target_volume_ml * term / denominator) * 1000.0
-        required_by_solution[solution_name] = (
-            required_by_solution.get(solution_name, 0.0)
-            + ingredient_volume_ul
-        )
-    return required_by_solution
+    return _resolve_solvency_required_volumes(inventory, request)
 
 
 def _allocate_from_vials(
@@ -78,7 +78,7 @@ def _allocate_from_vials(
     for vial in _sort_vials(vials):
         if remaining <= 0:
             break
-        if vial.current_solution_name != solution_name:
+        if vial.current_electrolyte is None or vial.current_electrolyte.name != solution_name:
             continue
 
         transfer_volume = min(vial.volume_ul, remaining)
@@ -99,7 +99,7 @@ def _consume_solution_from_vials(
     for vial in _sort_vials(vials):
         if remaining <= 0:
             break
-        if vial.current_solution_name != solution_name:
+        if vial.current_electrolyte is None or vial.current_electrolyte.name != solution_name:
             continue
 
         draw_volume = min(vial.volume_ul, remaining)
@@ -119,11 +119,8 @@ def _consume_solution_from_vials(
         if vial.volume_ul <= 0:
             vial.volume_ul = 0.0
             # Preserve history to support cleaning/reuse decisions.
-            vial.previous_solution_name = vial.current_solution_name
-            vial.current_solution_name = None
-            # Keep density field populated even when the vial is emptied to
-            # satisfy model constraints requiring a density for every vial.
-            # The value will typically be overwritten when the vial is reassigned.
+            vial.previous_electrolyte = vial.current_electrolyte
+            vial.current_electrolyte = None
 
     return usage_records
 
@@ -141,8 +138,8 @@ def _build_vial_alerts(
                 VialAlert(
                     x_ind=vial.x_ind,
                     y_ind=vial.y_ind,
-                    current_solution_name=vial.current_solution_name,
-                    previous_solution_name=vial.previous_solution_name,
+                    current_electrolyte=vial.current_electrolyte,
+                    previous_electrolyte=vial.previous_electrolyte,
                     remaining_volume_ul=vial.volume_ul,
                     low_volume_flag=low_flag,
                     empty_or_unusable_flag=empty_flag,
@@ -162,7 +159,28 @@ def plan_formulation(inventory: Inventory, request: FormulationRequest) -> Formu
     issues: List[FeasibilityIssue] = []
     instructions: List[TransferInstruction] = []
     step_index = 1
-    required_by_solution = _resolve_required_volumes(inventory, request)
+    try:
+        required_by_solution = _resolve_required_volumes(inventory, request)
+    except ValueError:
+        target_volume_ul = (request.target_electrolyte.volume or 0.0) * 1000.0
+        return FormulationPlan(
+            feasible=False,
+            recipe_name=request.recipe_name,
+            destination=request.destination,
+            total_required_volume_ul=target_volume_ul,
+            instructions=[],
+            issues=[
+                FeasibilityIssue(
+                    solution_name=request.target_electrolyte.name,
+                    required_volume_ul=target_volume_ul,
+                    available_volume_ul=0.0,
+                    deficit_volume_ul=target_volume_ul,
+                )
+            ],
+            low_volume_flag=False,
+            vial_alerts=[],
+            vial_usage=[],
+        )
     total_required_volume_ul = sum(required_by_solution.values())
 
     for solution_name, required_volume in required_by_solution.items():

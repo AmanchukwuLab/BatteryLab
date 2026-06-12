@@ -16,6 +16,7 @@ from .LiquidRobot import LiquidRobot, liquid_robot_command_loop
 from BatteryLab.electrolyte_planner import (
     DEFAULT_STATE_PATH,
     DEFAULT_TIP_RACK_PATH,
+    ElectrolyteSpec,
     clear_vial,
     load_inventory_state,
     print_vial_statuses,
@@ -100,45 +101,23 @@ def _assess_batch_requirements(recipes: list[dict], inventory: Inventory) -> tup
     required_by_solution: dict[str, float] = {}
 
     for recipe in recipes:
-        ingredients = recipe.get("ingredients") or []
-        if not ingredients:
-            continue
-
-        is_weight = ingredients[0].get("weight_percent") is not None
-        if not is_weight:
-            for ing in ingredients:
-                name = ing.get("solution_name")
-                vol = float(ing.get("volume_ul", 0.0) or 0.0)
+        plan = evaluate_formulation(inventory, recipe)
+        instructions = plan.get("instructions") or []
+        if instructions:
+            for instruction in instructions:
+                name = instruction.get("source_solution")
+                vol = float(instruction.get("volume_ul", 0.0) or 0.0)
                 if not name:
-                    raise ValueError("Ingredient missing solution_name")
+                    raise ValueError("Planner instruction missing source_solution")
                 required_by_solution[name] = required_by_solution.get(name, 0.0) + vol
             continue
 
-        # weight-percent recipe: convert to volumes using inventory densities
-        electrolyte_volume_ul = recipe.get("electrolyte_volume_ul")
-        if electrolyte_volume_ul is None:
-            raise ValueError(
-                f"Weight-percent recipe '{recipe.get('recipe_name')}' missing electrolyte_volume_ul"
-            )
-        target_volume_ml = float(electrolyte_volume_ul) / 1000.0
-
-        weight_over_density = []
-        for ing in ingredients:
-            sol = ing.get("solution_name")
-            wt = float(ing.get("weight_percent") or 0.0) / 100.0
-            if sol is None:
-                raise ValueError("Ingredient missing solution_name")
-            # get density from inventory (may raise if missing)
-            density = inventory.density_for_solution(sol)
-            weight_over_density.append((sol, wt / density))
-
-        denominator = sum(item[1] for item in weight_over_density)
-        if denominator <= 0:
-            raise ValueError("Invalid weight_percent/density combination for conversion")
-
-        for sol, term in weight_over_density:
-            vol_ul = (target_volume_ml * term / denominator) * 1000.0
-            required_by_solution[sol] = required_by_solution.get(sol, 0.0) + vol_ul
+        for issue in plan.get("issues", []):
+            name = issue.get("solution_name")
+            required = float(issue.get("required_volume_ul", 0.0) or 0.0)
+            if not name or required <= 0:
+                continue
+            required_by_solution[name] = required_by_solution.get(name, 0.0) + required
 
     # Compare to available inventory
     deficits: dict[str, float] = {}
@@ -150,25 +129,28 @@ def _assess_batch_requirements(recipes: list[dict], inventory: Inventory) -> tup
     return required_by_solution, deficits
 
 
-def _recipe_tip_sequence(recipe: dict) -> list[Optional[str]]:
-    """Generate a sequence of solution names for a recipe that reflects the order in which tips would be used"""
-    ingredients = recipe.get("ingredients") or []
-    if not ingredients:
-        return [None]
+def _recipe_tip_sequence(recipe: dict, inventory: Inventory) -> list[Optional[str]]:
+    """Generate a sequence of source solution names in the order tips are needed."""
 
-    sequence: list[Optional[str]] = []
-    seen: set[Optional[str]] = set()
-    for ingredient in ingredients:
-        substance_name = ingredient.get("solution_name")
-        if substance_name is None:
-            raise ValueError("Ingredient missing solution_name")
-        if substance_name not in seen:
-            sequence.append(substance_name)
-            seen.add(substance_name)
-    return sequence
+    plan = evaluate_formulation(inventory, recipe)
+    instructions = plan.get("instructions") or []
+    if instructions:
+        sequence: list[Optional[str]] = []
+        seen: set[Optional[str]] = set()
+        for instruction in instructions:
+            substance_name = instruction.get("source_solution")
+            if substance_name is None:
+                continue
+            if substance_name not in seen:
+                sequence.append(substance_name)
+                seen.add(substance_name)
+        if sequence:
+            return sequence
+
+    return [None]
 
 
-def _assess_batch_tip_requirements(recipes: list[dict], tip_rack: TipRack) -> tuple[int, int]:
+def _assess_batch_tip_requirements(recipes: list[dict], tip_rack: TipRack, inventory: Inventory) -> tuple[int, int]:
     """Return (additional_clean_tips_needed, current_clean_tips)."""
 
     clean_tip_count = sum(1 for tip in tip_rack.tips if tip.current_substance_name is None)
@@ -178,7 +160,7 @@ def _assess_batch_tip_requirements(recipes: list[dict], tip_rack: TipRack) -> tu
     additional_clean_tips_needed = 0
 
     for recipe in recipes:
-        for substance_name in _recipe_tip_sequence(recipe):
+        for substance_name in _recipe_tip_sequence(recipe, inventory):
             if substance_name is None:
                 if clean_tip_count <= 0:
                     additional_clean_tips_needed += 1
@@ -199,21 +181,36 @@ def _assess_batch_tip_requirements(recipes: list[dict], tip_rack: TipRack) -> tu
 
 
 def _recipe_metadata_snapshot(recipe: dict) -> dict:
-    ingredients = []
-    for ingredient in recipe.get("ingredients") or []:
-        if not isinstance(ingredient, dict):
-            raise ValueError("Recipe ingredient entries must be JSON objects")
-        ingredients.append(dict(ingredient))
-
-    total_volume_ul = recipe.get("electrolyte_volume_ul")
-    if total_volume_ul is not None:
-        total_volume_ul = float(total_volume_ul)
-
     return {
         "recipe_name": str(recipe.get("recipe_name", "")).strip(),
-        "electrolyte_volume_ul": total_volume_ul,
-        "ingredients": ingredients,
+        "target_electrolyte": recipe.get("target_electrolyte"),
+        "available_electrolytes": recipe.get("available_electrolytes", []),
     }
+
+
+def _electrolyte_spec_dump(spec: ElectrolyteSpec) -> dict:
+    if hasattr(spec, "model_dump"):
+        return spec.model_dump()
+    return spec.dict()
+
+
+def _read_electrolyte_spec_or_cancel(prompt: str) -> Optional[dict]:
+    print(prompt)
+    print("Enter a JSON object with solvency keys: name, volume, v, s, a, local_smiles, use_pubchem.")
+    while True:
+        raw = input("Electrolyte JSON (or q to cancel): ").strip()
+        if _is_cancel(raw):
+            return None
+        try:
+            payload = json.loads(raw)
+        except Exception as exc:
+            print(f"Invalid JSON: {exc}")
+            continue
+        try:
+            return _electrolyte_spec_dump(ElectrolyteSpec(**payload))
+        except Exception as exc:
+            print(f"Invalid electrolyte spec: {exc}")
+            continue
 
 
 def _prompt_batch_component_metadata(component_order: Sequence[Components]) -> dict:
@@ -301,7 +298,8 @@ def _simulate_recipe_execution(recipe: dict, inventory: Inventory) -> None:
     instructions = plan.get("instructions", [])
     if not instructions:
         # Fall back to a single-volume action if planner produced no instructions
-        vol = recipe.get("electrolyte_volume_ul") or 0
+        target = recipe.get("target_electrolyte") or {}
+        vol = (float(target.get("volume", 0.0)) * 1000.0) if target else 0
         print(f"Simulate: Acquire tip (simulated)")
         print(f"Simulate: Dispense {float(vol):.1f} uL to assembly post (single-vessel fallback)")
         print(f"Simulate: Return/drop tip (simulated)")
@@ -525,8 +523,10 @@ class BatterySessionTracker:
         if recipe is not None:
             recipe_snapshot = _recipe_metadata_snapshot(recipe)
             record["recipe_name"] = recipe_snapshot["recipe_name"]
-            if recipe_snapshot["electrolyte_volume_ul"] is not None:
-                record["recipe_total_volume_ul"] = str(recipe_snapshot["electrolyte_volume_ul"])
+            target = recipe_snapshot.get("target_electrolyte") or {}
+            target_volume = target.get("volume")
+            if target_volume is not None:
+                record["recipe_total_volume_ul"] = str(float(target_volume) * 1000.0)
             record["recipe_snapshot_json"] = json.dumps(recipe_snapshot, sort_keys=True)
         if batch_component_metadata is not None:
             record["batch_component_metadata_json"] = json.dumps(
@@ -664,15 +664,16 @@ class AutoBatteryLab(Node):
     @staticmethod
     def _electrolyte_volume_for_recipe(recipe: Optional[dict]) -> float:
         if recipe is None:
-            return 50.0
+            # If no recipe is provided, don't aspirate anything!
+            return 0.0
 
-        for key in ("electrolyte_volume_ul",):
-            value = recipe.get(key)
-            if value is not None:
-                volume_ul = float(value)
-                if volume_ul <= 0:
-                    raise ValueError("Recipe electrolyte volume must be greater than zero.")
-                return volume_ul
+        target = recipe.get("target_electrolyte") or {}
+        value = target.get("volume")
+        if value is not None:
+            volume_ul = float(value) * 1000.0
+            if volume_ul <= 0:
+                raise ValueError("Recipe electrolyte volume must be greater than zero.")
+            return volume_ul
 
         return 50.0
 
@@ -822,15 +823,20 @@ class AutoBatteryLab(Node):
                 # Load tip rack and select an appropriate tip
                 tip_rack = load_tip_rack_state()
                 
-                if recipe is None or not recipe.get("ingredients"):
-                    # Fall back to single-volume dispense
+                if recipe is None or not recipe.get("target_electrolyte"):
+                    print("No solvency electrolyte recipe provided. Using default demo behavior.")
+                    # This should only happen during a demo (no recipe)
                     volume_to_get = self._electrolyte_volume_for_recipe(recipe)
-                    tip_index = _tip_index_for_substance_or_raise(tip_rack, None)
+                    # default to the first vial for a demo
+                    liquid_x, liquid_y = 0, 0
+                    try: 
+                        substance_name = inventory.solution_at(liquid_x, liquid_y)
+                    except Exception:
+                        substance_name = None
+                    tip_index = _tip_index_for_substance_or_raise(tip_rack, substance_name)
                     tip_x, tip_y = _tip_index_to_coordinates(tip_index)
                     
                     self.liquid_robot.MG400.get_tip(tip_x, tip_y)
-                    # default single-bottle coordinates
-                    liquid_x, liquid_y = 0, 0
                     self.liquid_robot.MG400.get_liquid(liquid_x, liquid_y, volume_to_get)
                     self.liquid_robot.MG400.add_liquid_to_post(volume_to_get)
                     self.liquid_robot.MG400.return_liquid(liquid_x, liquid_y)
@@ -838,7 +844,7 @@ class AutoBatteryLab(Node):
                     self.liquid_robot.MG400.move_home()
                     
                     # Mark tip as used for unknown substance
-                    tip_rack.mark_tip_used(tip_index, None)
+                    tip_rack.mark_tip_used(tip_index, substance_name)
                     save_tip_rack_state(tip_rack)
                 else:
                     # Use electrolyte planner to allocate from vials and update inventory
@@ -1027,13 +1033,8 @@ Electrolyte Planner Menu
                 print("Canceled add/update operation.")
                 continue
 
-            solution_name = input("Solution name: ").strip()
-            if _is_cancel(solution_name):
-                print("Canceled add/update operation.")
-                continue
-
-            density_g_per_ml = _read_positive_float_or_cancel("Density (g/mL): ")
-            if density_g_per_ml is None:
+            electrolyte_payload = _read_electrolyte_spec_or_cancel("Electrolyte identity for this vial:")
+            if electrolyte_payload is None:
                 print("Canceled add/update operation.")
                 continue
 
@@ -1047,9 +1048,8 @@ Electrolyte Planner Menu
                     inventory,
                     x_ind=x_ind,
                     y_ind=y_ind,
-                    solution_name=solution_name,
+                    electrolyte=electrolyte_payload,
                     volume_ul=volume_ul,
-                    density_g_per_ml=density_g_per_ml,
                 )
                 save_inventory_state(inventory)
                 print(
@@ -1310,7 +1310,7 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
 
         try:
             tip_rack = load_tip_rack_state()
-            additional_tips_needed, clean_tip_count = _assess_batch_tip_requirements(recipes, tip_rack)
+            additional_tips_needed, clean_tip_count = _assess_batch_tip_requirements(recipes, tip_rack, inventory)
         except Exception as e:
             print(f"Failed to assess pipette tip requirements: {e}")
             return

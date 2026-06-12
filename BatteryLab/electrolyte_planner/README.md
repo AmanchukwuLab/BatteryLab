@@ -3,41 +3,41 @@
 This subpackage provides a minimal, standalone interface for:
 
 - tracking which stock solutions are stored in each robot-accessible vial,
-- storing density for each currently assigned solution,
+- storing solvency `Electrolyte` identities for each currently assigned vial,
 - checking whether a requested formulation is possible from current inventory,
 - generating machine-readable pipetting instructions.
 
 It also supports persistence of vial inventory to JSON so state can survive
 application restarts.
 
-The planner supports two recipe input modes:
+Recipes now use solvency-style electrolyte objects directly:
 
-- volume-based ingredients (`volume_ul` per component),
-- weight-percent ingredients (`weight_percent` per component) with
-    `electrolyte_volume_ul`.
+- `target_electrolyte` describes the final formulation,
+- `available_electrolytes` lists the stock electrolytes that can be mixed,
+- each electrolyte is expressed with `name`, `volume`, `v`, `s`, and `a`.
 
-For weight-percent mode, each component's density is read from its assigned vial
-(`current_solution_density_g_per_ml`) and used to convert weight fractions to
-required dispense volumes.
-
-## Volume-based feasibility example
+## Solvency feasibility example
 
 ```python
 from BatteryLab.electrolyte_planner import evaluate_formulation
 inventory = {
     "vials": [
-        {"x_ind": 0, "y_ind": 0, "current_solution_name": "ZnSO4_1M_water", "current_solution_density_g_per_ml": 1.02, "volume_ul": 800},
-        {"x_ind": 0, "y_ind": 1, "current_solution_name": "H2O", "current_solution_density_g_per_ml": 1.000, "volume_ul": 2000},
-        {"x_ind": 1, "y_ind": 0, "current_solution_name": "ZnCl2_1M_water", "current_solution_density_g_per_ml": 1.04, "volume_ul": 400},
+        {"x_ind": 0, "y_ind": 0, "current_electrolyte": {"name": "water_stock", "v": {"water": 1.0}}, "volume_ul": 800},
+        {"x_ind": 0, "y_ind": 1, "current_electrolyte": {"name": "ethanol_stock", "v": {"ethanol": 1.0}}, "volume_ul": 800},
     ]
 }
 
 request = {
-    "recipe_name": "zn_aqueous_baseline",
+    "recipe_name": "baseline_mix",
     "destination": "mix_vessel_01",
-    "ingredients": [
-        {"solution_name": "ZnSO4_1M_water", "volume_ul": 600},
-        {"solution_name": "H2O", "volume_ul": 800},
+    "target_electrolyte": {
+        "name": "baseline_target",
+        "volume": 0.05,
+        "v": {"water": 0.5, "ethanol": 0.5},
+    },
+    "available_electrolytes": [
+        {"name": "water_stock", "v": {"water": 1.0}},
+        {"name": "ethanol_stock", "v": {"ethanol": 1.0}},
     ],
 }
 
@@ -49,32 +49,6 @@ plan = evaluate_formulation(inventory, request)
 - `feasible`: whether the formulation can be made,
 - `instructions`: a list of transfer steps,
 - `issues`: why the request could not be satisfied, if applicable.
-
-Transfer instructions use `source_x_ind` and `source_y_ind`.
-
-## Weight-percent recipe example
-
-```python
-from BatteryLab.electrolyte_planner import evaluate_formulation
-inventory = {
-    "vials": [
-        {"x_ind": 0, "y_ind": 0, "current_solution_name": "ZnSO4_stock", "current_solution_density_g_per_ml": 1.030, "volume_ul": 1200},
-        {"x_ind": 0, "y_ind": 1, "current_solution_name": "H2O", "current_solution_density_g_per_ml": 1.000, "volume_ul": 2000},
-    ]
-}
-
-request = {
-    "recipe_name": "zn_water_50wt",
-    "destination": "mix_vessel_01",
-    "electrolyte_volume_ul": 600,
-    "ingredients": [
-        {"solution_name": "ZnSO4_stock", "weight_percent": 50.0},
-        {"solution_name": "H2O", "weight_percent": 50.0},
-    ],
-}
-
-plan = evaluate_formulation(inventory, request)
-```
 
 ## Vial tracking and low-volume flags
 
