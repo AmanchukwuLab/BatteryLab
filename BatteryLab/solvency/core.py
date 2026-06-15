@@ -26,7 +26,7 @@ class Electrolyte:
 
     Parameters
     - name: user-facing name
-    - volume: total volume (mL). Can be None for "formulation only" objects.
+    - volume: total volume (uL). Can be None for "formulation only" objects.
     - v: dict of solvent_name -> volume fraction (will be normalized if needed)
     - s: dict of salt_name -> molarity
     - a: dict of additive_name -> molarity

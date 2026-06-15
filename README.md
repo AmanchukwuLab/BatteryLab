@@ -138,7 +138,7 @@ Additionally, electrolytes must be stocked in the 16 available vials, and pipett
 
 ### Assembling cells
 Once the materials have been stocked, the main ```app.py``` program allows you to:
-- Press **[O]ne** to assemble a single demo battery. This will use a default "recipe" of 0mL of the substance in the vial at coordinate ```(x = 0, y = 0)```
+- Press **[O]ne** to assemble a single demo battery. This will use a default "recipe" of 0uL of the substance in the vial at coordinate ```(x = 0, y = 0)```
 - Press **[B]atch** to load a JSON recipes file and assemble a series of cells in sequence. The app will prompt for either a file path or the use of a GUI to select a file.
 
 An example recipe file (for the [B]atch option) looks like this:
@@ -147,7 +147,6 @@ An example recipe file (for the [B]atch option) looks like this:
 [
   {
     "recipe_name": "baseline_cell_01",
-    "destination": "mix_vessel",
     "target_electrolyte": {
       "name": "baseline_target",
       "volume": 0.05,

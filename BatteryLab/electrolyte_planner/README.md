@@ -4,17 +4,13 @@ This subpackage provides a minimal, standalone interface for:
 
 - tracking which stock solutions are stored in each robot-accessible vial,
 - storing solvency `Electrolyte` identities for each currently assigned vial,
-- checking whether a requested formulation is possible from current inventory,
+- accessing solvency's interface for checking whether a requested formulation is possible from current inventory,
 - generating machine-readable pipetting instructions.
 
 It also supports persistence of vial inventory to JSON so state can survive
 application restarts.
 
-Recipes now use solvency-style electrolyte objects directly:
-
-- `target_electrolyte` describes the final formulation,
-- `available_electrolytes` lists the stock electrolytes that can be mixed,
-- each electrolyte is expressed with `name`, `volume`, `v`, `s`, and `a`.
+Recipes now use solvency-style electrolyte objects directly, with fields for `name`, `volume`, `v`olume fractions, `s`alt molarities, and `a`dditive molarities (see below).
 
 ## Solvency feasibility example
 
@@ -29,20 +25,17 @@ inventory = {
 
 request = {
     "recipe_name": "baseline_mix",
-    "destination": "mix_vessel_01",
     "target_electrolyte": {
         "name": "baseline_target",
         "volume": 0.05,
         "v": {"water": 0.5, "ethanol": 0.5},
-    },
-    "available_electrolytes": [
-        {"name": "water_stock", "v": {"water": 1.0}},
-        {"name": "ethanol_stock", "v": {"ethanol": 1.0}},
-    ],
+    }
 }
 
 plan = evaluate_formulation(inventory, request)
 ```
+
+TODO: continue editing here
 
 `evaluate_formulation(...)` returns a plain dictionary with:
 
@@ -52,7 +45,7 @@ plan = evaluate_formulation(inventory, request)
 
 ## Vial tracking and low-volume flags
 
-Vials are modeled with a 1.5 mL maximum (`1500 uL`). The helper
+Vials are modeled with a 1500 uL maximum. The helper
 `evaluate_formulation_with_vials(...)` will:
 
 - evaluate feasibility,

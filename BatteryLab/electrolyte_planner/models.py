@@ -62,11 +62,10 @@ class FormulationRequest(BaseModel):
     """A recipe request written in solvency Electrolyte format."""
 
     recipe_name: str = Field(..., min_length=1)
-    destination: str = Field(default="mix_vessel", min_length=1)
     target_electrolyte: ElectrolyteSpec
     available_electrolytes: List[ElectrolyteSpec] = Field(default_factory=list)
 
-    @validator("recipe_name", "destination")
+    @validator("recipe_name")
     def _strip_text(cls, value: str) -> str:
         value = value.strip()
         if not value:
@@ -82,10 +81,9 @@ class TransferInstruction(BaseModel):
     source_x_ind: int = Field(..., ge=0)
     source_y_ind: int = Field(..., ge=0)
     source_solution: str = Field(..., min_length=1)
-    destination: str = Field(..., min_length=1)
     volume_ul: float = Field(..., gt=0)
 
-    @validator("ingredient_name", "source_solution", "destination")
+    @validator("ingredient_name", "source_solution")
     def _strip_text(cls, value: str) -> str:
         value = value.strip()
         if not value:
@@ -167,7 +165,6 @@ class FormulationPlan(BaseModel):
 
     feasible: bool
     recipe_name: str = Field(..., min_length=1)
-    destination: str = Field(..., min_length=1)
     total_required_volume_ul: float = Field(..., ge=0)
     instructions: List[TransferInstruction] = Field(default_factory=list)
     issues: List[FeasibilityIssue] = Field(default_factory=list)
@@ -175,7 +172,7 @@ class FormulationPlan(BaseModel):
     vial_alerts: List[VialAlert] = Field(default_factory=list)
     vial_usage: List[VialUsageRecord] = Field(default_factory=list)
 
-    @validator("recipe_name", "destination")
+    @validator("recipe_name")
     def _strip_text(cls, value: str) -> str:
         value = value.strip()
         if not value:
@@ -293,4 +290,10 @@ class Inventory(BaseModel):
         for vial in self.vials:
             if vial.x_ind == x_ind and vial.y_ind == y_ind:
                 return vial.electrolyte_name()
+        raise KeyError(f"No vial found at coordinates: x_ind={x_ind}, y_ind={y_ind}")
+
+    def volume_at(self, x_ind: int, y_ind: int) -> Optional[float]:
+        for vial in self.vials:
+            if vial.x_ind == x_ind and vial.y_ind == y_ind:
+                return vial.volume_ul
         raise KeyError(f"No vial found at coordinates: x_ind={x_ind}, y_ind={y_ind}")

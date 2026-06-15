@@ -29,6 +29,7 @@ from BatteryLab.electrolyte_planner import (
     load_tip_rack_state,
     save_tip_rack_state,
     TipRack,
+    VIAL_MAX_VOLUME_UL,
 )
 from BatteryLab.robots.Constants import Components
 
@@ -196,21 +197,106 @@ def _electrolyte_spec_dump(spec: ElectrolyteSpec) -> dict:
 
 def _read_electrolyte_spec_or_cancel(prompt: str) -> Optional[dict]:
     print(prompt)
-    print("Enter a JSON object with solvency keys: name, volume, v, s, a, local_smiles, use_pubchem.")
+    print("""The following information is required to specify an electrolyte: 
+    name (for user reference)
+    volume (total, uL)
+    v = dictionary of solvent_name:volume_amounts or volume_fractions of each component. This is normalized internally
+    s = dictionary of salt_name:molarity for each salt
+    a = dictionary of additive_name:molarity for each additive
+    local_smiles = optional dictionary of component_name:SMILES for each component
+    use_pubchem = boolean indicating whether to attempt querying PubChem for SMILES not provided by the user
+        NOTE: if use_pubchem is False, local_smiles must contain entries for all components.""")
     while True:
-        raw = input("Electrolyte JSON (or q to cancel): ").strip()
-        if _is_cancel(raw):
-            return None
+        params = {'name': "",
+                  'volume': "",
+                  'v': "",
+                  's': "",
+                  'a': "",
+                  'local_smiles': "",
+                  'use_pubchem': ""}
+        types = {'name': str,
+                'volume': float,
+                'v': dict,
+                's': dict,
+                'a': dict,
+                'local_smiles': dict,
+                'use_pubchem': bool}
+        valid_none = ('s', 'a', 'local_smiles') # these fields can validly be None
+        done = False
+
+        while not done:
+            for param in params.keys():
+                while params[param] == "":
+                    raw = input(f"{types[param].__name__} for {param}: ").strip()
+                    if _is_cancel(raw):
+                        confirm = input("Quit operation? All progress for this electroyte will be lost.")
+                        if _is_confirm(confirm):
+                            return None
+                        else:
+                            continue
+                    if raw == "" or raw.lower() == "none":
+                        if param in valid_none:
+                            confirm = input(f"Confirm 'None' for {param}? (y/n) ").strip().lower()
+                            if _is_confirm(confirm):
+                                params[param] = {} if types[param] == dict else None
+                        else:
+                            print(f"{param} cannot be empty. Please provide a valid {types[param].__name__}.")
+                    else:
+                        try:
+                            if types[param] == bool:
+                                try:
+                                    params[param] = _parse_bool(raw)
+                                except ValueError as exc:
+                                    print(f"Invalid boolean input for {param}: {exc}. Please provide a valid boolean value (e.g., true/false).")
+                            elif types[param] is dict:
+                                    try: 
+                                        params[param] = json.loads(raw.replace("'", "\""))
+                                    except json.JSONDecodeError as exc:
+                                        print(f"Invalid input for {param}: {exc}. Please provide a valid {types[param].__name__}.")
+                            else:
+                                params[param] = types[param](raw)
+                                if param == "volume" and params[param] > VIAL_MAX_VOLUME_UL:
+                                    raise ValueError(f"Specified volume {params[param]} uL exceeds preset max vial capacity of {VIAL_MAX_VOLUME_UL} uL.")
+                        except Exception as exc:
+                            print(f"Invalid input for {param}: {exc}. Please provide a valid {types[param].__name__}.")
+                            params[param] = ""
+            
+            # Confirm input
+            print("\nYou have entered the following electrolyte specification:")
+            for key, value in params.items():
+                print(f"  {key}: {value}")
+            confirm = input("Is this correct? (y/n) ").strip().lower()
+            if not _is_confirm(confirm):
+                print("Which specs would you like to correct? (type names separated by commas, or 'all' to re-enter everything)")
+                to_correct = input("Specifications to correct: ").strip().lower()
+                if to_correct == "all":
+                    params = {key: "" for key in params.keys()}
+                else:
+                    to_correct_set = {name.strip() for name in to_correct.split(",")}
+                    for name in to_correct_set:
+                        if name in params:
+                            params[name] = ""
+                        else:
+                            while name not in params:
+                                name = input(f"Specification '{name}' not recognized. Please re-try ('none' to move on): ").strip().lower()
+                                if name.lower() == 'none':
+                                    to_correct_set.remove(name)
+                            params[name] = ""
+            else:
+                done = True
+
         try:
-            payload = json.loads(raw)
-        except Exception as exc:
-            print(f"Invalid JSON: {exc}")
-            continue
-        try:
-            return _electrolyte_spec_dump(ElectrolyteSpec(**payload))
+            return _electrolyte_spec_dump(ElectrolyteSpec(**params))
         except Exception as exc:
             print(f"Invalid electrolyte spec: {exc}")
             continue
+
+def _parse_bool(raw: str) -> bool:
+    if raw.lower() in {"true", "t", "yes", "y", "1"}:
+        return True
+    if raw.lower() in {"false", "f", "no", "n", "0"}:
+        return False
+    raise ValueError(f"Cannot parse boolean value from '{raw}'")
 
 
 def _prompt_batch_component_metadata(component_order: Sequence[Components]) -> dict:
@@ -299,7 +385,7 @@ def _simulate_recipe_execution(recipe: dict, inventory: Inventory) -> None:
     if not instructions:
         # Fall back to a single-volume action if planner produced no instructions
         target = recipe.get("target_electrolyte") or {}
-        vol = (float(target.get("volume", 0.0)) * 1000.0) if target else 0
+        vol = (float(target.get("volume", 0.0))) if target else 0
         print(f"Simulate: Acquire tip (simulated)")
         print(f"Simulate: Dispense {float(vol):.1f} uL to assembly post (single-vessel fallback)")
         print(f"Simulate: Return/drop tip (simulated)")
@@ -526,7 +612,7 @@ class BatterySessionTracker:
             target = recipe_snapshot.get("target_electrolyte") or {}
             target_volume = target.get("volume")
             if target_volume is not None:
-                record["recipe_total_volume_ul"] = str(float(target_volume) * 1000.0)
+                record["recipe_total_volume_ul"] = str(float(target_volume))
             record["recipe_snapshot_json"] = json.dumps(recipe_snapshot, sort_keys=True)
         if batch_component_metadata is not None:
             record["batch_component_metadata_json"] = json.dumps(
@@ -670,12 +756,12 @@ class AutoBatteryLab(Node):
         target = recipe.get("target_electrolyte") or {}
         value = target.get("volume")
         if value is not None:
-            volume_ul = float(value) * 1000.0
+            volume_ul = float(value)
             if volume_ul <= 0:
                 raise ValueError("Recipe electrolyte volume must be greater than zero.")
             return volume_ul
 
-        return 50.0
+        return 0.0
 
     def assemble_batteries_in_series(
         self,
@@ -958,6 +1044,9 @@ class AutoBatteryLab(Node):
 def _is_cancel(value: str) -> bool:
     return value.strip().lower() in {"q", "x", "cancel"}
 
+def _is_confirm(value: str) -> bool:
+    return value.strip().lower() in {"y", "yes", "confirm"}
+
 
 def _read_positive_float_or_cancel(prompt: str):
     while True:
@@ -1001,11 +1090,12 @@ def electrolyte_planner_menu(batterylab: AutoBatteryLab):
         print(f"Unable to open electrolyte planner: {e}")
         return
 
-    prompt = """------------------------
+    prompt = """
+--------------------------------------------------
 Electrolyte Planner Menu
 [V]iew vial status
 [A]dd/update vial contents (after physical refill)
-[C]leaned vial (mark as empty)
+[C]lean vial (mark as empty)
 [R]eload inventory from disk
 [S]ave inventory to disk
 [P]rint the location of the inventory file on disk
@@ -1033,15 +1123,34 @@ Electrolyte Planner Menu
                 print("Canceled add/update operation.")
                 continue
 
-            electrolyte_payload = _read_electrolyte_spec_or_cancel("Electrolyte identity for this vial:")
+            # Check if vial is currently occupied
+            try:
+                current_solution = inventory.solution_at(x_ind, y_ind)
+                current_volume = inventory.volume_at(x_ind, y_ind)
+                if current_solution is not None and current_volume > 0:
+                    print(
+                        f"Warning: vial at (x={x_ind}, y={y_ind}) currently contains '{current_solution}' with volume {current_volume:.1f} uL."
+                    )
+                    confirm = input(
+                        "Do you want to overwrite this vial's contents? (y/n or q to cancel): "
+                    ).strip().lower()
+                    if _is_cancel(confirm):
+                        print("Canceled add/update operation.")
+                        continue
+                    if confirm != "y":
+                        print("Canceled.")
+                        continue
+            except Exception as e:
+                # If there's an error accessing the vial, assume it's empty and proceed
+                print(f"An error occurred while checking vial contents: {e}. Proceeding with add/update operation.")
+                pass
+
+            electrolyte_payload = _read_electrolyte_spec_or_cancel("\n")
             if electrolyte_payload is None:
                 print("Canceled add/update operation.")
                 continue
 
-            volume_ul = _read_positive_float_or_cancel("Current volume in vial (uL): ")
-            if volume_ul is None:
-                print("Canceled add/update operation.")
-                continue
+            volume_ul = electrolyte_payload['volume'] # should have been provided when loading in electrolytes
 
             try:
                 inventory = set_vial_contents(

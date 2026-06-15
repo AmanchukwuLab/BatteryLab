@@ -31,37 +31,25 @@ def _sort_vials(vials: Sequence[VialContents]) -> List[VialContents]:
     return sorted(vials, key=lambda item: (item.x_ind, item.y_ind))
 
 
-def _build_solvency_bank(inventory: Inventory, request: FormulationRequest) -> List[Electrolyte]:
+def _build_solvency_bank(inventory: Inventory) -> List[Electrolyte]:
     bank: List[Electrolyte] = []
-    for stock in request.available_electrolytes:
-        available_volume_ml = inventory.available_volume(stock.name) / 1000.0
-        bank.append(
-            Electrolyte(
-                name=stock.name,
-                volume=available_volume_ml or 1.0,
-                v=dict(stock.v),
-                s=dict(stock.s),
-                a=dict(stock.a),
-                local_smiles=dict(stock.local_smiles or {}),
-                use_pubchem=stock.use_pubchem,
-            )
-        )
+    for vial in inventory.vials:
+        if vial.current_electrolyte is not None:
+            bank.append(vial.current_electrolyte.to_solvency())
     return bank
+    
 
 
 def _resolve_solvency_required_volumes(
     inventory: Inventory, request: FormulationRequest
 ) -> Dict[str, float]:
-    bank = _build_solvency_bank(inventory, request)
-    if not bank:
-        raise ValueError("available_electrolytes did not match any configured stock solutions")
-
+    bank   = _build_solvency_bank(inventory)
     target = request.target_electrolyte.to_solvency()
 
     solution = e_solver(bank, target)
     required_by_solution: Dict[str, float] = {}
     for solution_name, fraction in solution.items():
-        required_by_solution[solution_name] = fraction * (request.target_electrolyte.volume or 0.0) * 1000.0
+        required_by_solution[solution_name] = fraction * (request.target_electrolyte.volume)
     return required_by_solution
 
 
@@ -164,11 +152,10 @@ def plan_formulation(inventory: Inventory, request: FormulationRequest) -> Formu
     try:
         required_by_solution = _resolve_required_volumes(inventory, request)
     except ValueError:
-        target_volume_ul = (request.target_electrolyte.volume or 0.0) * 1000.0
+        target_volume_ul = (request.target_electrolyte.volume)
         return FormulationPlan(
             feasible=False,
             recipe_name=request.recipe_name,
-            destination=request.destination,
             total_required_volume_ul=target_volume_ul,
             instructions=[],
             issues=[
@@ -201,7 +188,6 @@ def plan_formulation(inventory: Inventory, request: FormulationRequest) -> Formu
         return FormulationPlan(
             feasible=False,
             recipe_name=request.recipe_name,
-            destination=request.destination,
             total_required_volume_ul=total_required_volume_ul,
             instructions=[],
             issues=issues,
@@ -224,7 +210,6 @@ def plan_formulation(inventory: Inventory, request: FormulationRequest) -> Formu
                     source_x_ind=source_x_ind,
                     source_y_ind=source_y_ind,
                     source_solution=source_solution,
-                    destination=request.destination,
                     volume_ul=volume_ul,
                 )
             )
@@ -233,7 +218,6 @@ def plan_formulation(inventory: Inventory, request: FormulationRequest) -> Formu
     return FormulationPlan(
         feasible=True,
         recipe_name=request.recipe_name,
-        destination=request.destination,
         total_required_volume_ul=total_required_volume_ul,
         instructions=instructions,
         issues=[],

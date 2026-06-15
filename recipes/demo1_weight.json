@@ -1,7 +1,6 @@
 [
   {
     "recipe_name": "demo_mix_cell_01",
-    "destination": "mix_vessel",
     "target_electrolyte": {
       "name": "demo_mix_cell_01_target",
       "volume": 0.05,
@@ -9,22 +8,6 @@
         "water": 0.25,
         "ethanol": 0.75
       }
-    },
-    "available_electrolytes": [
-      {
-        "name": "water_stock",
-        "volume": 0.15,
-        "v": {
-          "water": 1.0
-        }
-      },
-      {
-        "name": "ethanol_stock",
-        "volume": 0.15,
-        "v": {
-          "ethanol": 1.0
-        }
-      }
-    ]
+    }
   }
 ]
