@@ -1,0 +1,41 @@
+[
+  {
+    "recipe_name": "demo_cell_1",
+    "target_electrolyte": {
+      "name": "demo_cell_1",
+      "volume": 50.0,
+      "v": {
+        "water": 0.5,
+        "propylene glycol": 0.5
+      }
+    }
+  },
+  {
+    "recipe_name": "demo_cell_2",
+    "target_electrolyte": {
+      "name": "demo_cell_2",
+      "volume": 50.0,
+      "v": {
+        "water": 0.5,
+        "propylene glycol": 0.5
+      },
+      "s": {
+        "H2SO4": 0.4
+      }
+    }
+  },
+  {
+    "recipe_name": "demo_cell_3",
+    "target_electrolyte": {
+      "name": "demo_cell_3",
+      "volume": 50.0,
+      "v": {
+        "water": 0.25,
+        "propylene glycol": 0.75
+      },
+      "s": {
+        "H2SO4": 0.4
+      }
+    }
+  }
+]

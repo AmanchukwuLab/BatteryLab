@@ -107,7 +107,7 @@ class Electrolyte:
 
         if not compounds:
             raise ValueError(f"Compound '{name}' not found in PubChem")
-        smiles = compounds[0].isomeric_smiles or compounds[0].canonical_smiles
+        smiles = compounds[0].smiles or compounds[0].canonical_smiles
         _SMILES_CACHE[name] = smiles
         return smiles
 

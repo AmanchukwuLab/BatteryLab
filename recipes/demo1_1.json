@@ -1,8 +1,8 @@
 [
   {
-    "recipe_name": "demo_mix_cell_00",
+    "recipe_name": "demo_cell_1",
     "target_electrolyte": {
-      "name": "demo_mix_cell_00_target",
+      "name": "demo_cell_1",
       "volume": 50.0,
       "v": {
         "water": 0.5,
