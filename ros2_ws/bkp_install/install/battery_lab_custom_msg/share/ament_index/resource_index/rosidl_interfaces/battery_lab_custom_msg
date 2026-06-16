@@ -1,0 +1,10 @@
+srv/CaptureImage.idl
+srv/CaptureImage.srv
+srv/GetAbsRailPos.idl
+srv/GetAbsRailPos.srv
+srv/MoveLinearRail.idl
+srv/MoveLinearRail.srv
+srv/SartoriusCtrl.idl
+srv/SartoriusCtrl.srv
+srv/SuctionPumpCtrl.idl
+srv/SuctionPumpCtrl.srv

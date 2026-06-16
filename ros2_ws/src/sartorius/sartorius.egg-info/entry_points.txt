@@ -1,0 +1,3 @@
+[console_scripts]
+sartorius_client = sartorius.sartorius_client:main
+sartorius_server = sartorius.sartorius_server:main

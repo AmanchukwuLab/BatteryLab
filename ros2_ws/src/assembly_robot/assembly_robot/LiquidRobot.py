@@ -116,7 +116,7 @@ def liquid_robot_command_loop(liquidRobot: LiquidRobot):
             elif input_str == "A":
                 x = int(input("Please input liquid bottle index x:").strip())
                 y = int(input("Please input liquid bottle index y:").strip())
-                volume = int(input("Please input volume:").strip())
+                volume = float(input("Please input volume:").strip())
                 liquidRobot.MG400.get_liquid(x, y, volume)
             elif input_str == "P":
                 liquidRobot.MG400.parse_position_file()
@@ -126,8 +126,10 @@ def liquid_robot_command_loop(liquidRobot: LiquidRobot):
     except KeyboardInterrupt:
         print("Program interrupted by user.")
     finally:
-        liquidRobot.disconnect()
-        print("MG400 disconnected safely.")
+        #liquidRobot.disconnect()
+        #print("MG400 disconnected safely.")
+        pass # the above lines were causing errors when the liquid robot menu was used 
+             # before assembly: there isn't a provision to re-connect to the liquid robot.
 
 
 def liquid_robot_example():
@@ -137,6 +139,8 @@ def liquid_robot_example():
         print("Failed to initialize the Liquid Robot, program aborted!")
         exit()
     liquid_robot_command_loop(liquid_robot)
+    liquid_robot.disconnect()
+    print("MG400 disconnected safely.")
 
 
 def main():

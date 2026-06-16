@@ -1,0 +1,15 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from battery_lab_custom_msg/srv/MoveLinearRail.srv
+// generated code does not contain a copyright notice
+
+
+module battery_lab_custom_msg {
+  module srv {
+    struct MoveLinearRail_Request {
+      float target_position;
+    };
+    struct MoveLinearRail_Response {
+      boolean success;
+    };
+  };
+};

@@ -1,0 +1,5 @@
+/home/yuanjian/Research/BatteryLab/ros2_ws/build/battery_lab_custom_msg/rosidl_adapter/battery_lab_custom_msg:srv/SartoriusCtrl.idl
+/home/yuanjian/Research/BatteryLab/ros2_ws/build/battery_lab_custom_msg/rosidl_adapter/battery_lab_custom_msg:srv/SuctionPumpCtrl.idl
+/home/yuanjian/Research/BatteryLab/ros2_ws/build/battery_lab_custom_msg/rosidl_adapter/battery_lab_custom_msg:srv/GetAbsRailPos.idl
+/home/yuanjian/Research/BatteryLab/ros2_ws/build/battery_lab_custom_msg/rosidl_adapter/battery_lab_custom_msg:srv/MoveLinearRail.idl
+/home/yuanjian/Research/BatteryLab/ros2_ws/build/battery_lab_custom_msg/rosidl_adapter/battery_lab_custom_msg:srv/CaptureImage.idl

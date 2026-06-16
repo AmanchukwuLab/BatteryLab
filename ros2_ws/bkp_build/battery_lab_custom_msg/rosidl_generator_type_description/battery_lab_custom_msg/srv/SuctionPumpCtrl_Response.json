@@ -1,0 +1,26 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "battery_lab_custom_msg/srv/SuctionPumpCtrl_Response",
+      "fields": [
+        {
+          "name": "status",
+          "type": {
+            "type_id": 17,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "battery_lab_custom_msg/srv/SuctionPumpCtrl_Response",
+      "hash_string": "RIHS01_966a3b041b4565d40d16a1a99a0adb1fdb7e593c99055a3458e9de1389e36ea9"
+    }
+  ]
+}

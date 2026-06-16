@@ -1,0 +1,26 @@
+{
+  "type_description_msg": {
+    "type_description": {
+      "type_name": "battery_lab_custom_msg/srv/CaptureImage_Request",
+      "fields": [
+        {
+          "name": "structure_needs_at_least_one_member",
+          "type": {
+            "type_id": 3,
+            "capacity": 0,
+            "string_capacity": 0,
+            "nested_type_name": ""
+          },
+          "default_value": ""
+        }
+      ]
+    },
+    "referenced_type_descriptions": []
+  },
+  "type_hashes": [
+    {
+      "type_name": "battery_lab_custom_msg/srv/CaptureImage_Request",
+      "hash_string": "RIHS01_fff4742ca970eb44bf2d730b325f8ca2a1d4ea84db22a56d1b71dcfff5b964b8"
+    }
+  ]
+}

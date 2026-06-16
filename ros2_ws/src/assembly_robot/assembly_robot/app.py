@@ -436,6 +436,7 @@ def _simulate_recipe_execution_with_movements(recipe: dict, inventory: Inventory
     # Get instructions, connect to liquid handler
     instructions = plan.get("instructions", [])
     mg = liquid_robot.MG400
+    print("Re-homing liquid robot...")
     mg.move_home()  # ensure we start from a known position
     
     # Load tip rack and select an appropriate tip (matching real assembly behavior)
@@ -1455,6 +1456,8 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
             if action != "y":
                 print("Canceled after test.")
                 return
+            else:
+                action = "a"  # set to assemble after testing
         if action == "m":
             # Run movement-only simulation (commands MG400 to move to tips/vials but does not aspirate)
             # Allow user to select which recipe(s) to simulate
@@ -1483,6 +1486,8 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
             if action != "y":
                 print("Canceled after movement-simulation.")
                 return
+            else:
+                action = "a"  # set to assemble after movement simulation
         if action == "a":
             batch_component_metadata = _prompt_batch_component_metadata_with_reuse(
                 batterylab.session_tracker.component_order
@@ -1515,7 +1520,7 @@ Welcome to BatteryLab! Please select a command:
 [L]iquid   robot submenu
 [C]rimper  robot submenu
 [B]atch recipes file input to assemble series of batteries
-[O]ne battery demonstration (single assembly using defaults and no recipe)
+[D]emo battery (single assembly using defaults and no recipe)
 [E]lectrolyte vial manager
 [T]ip (pipette) manager
 [S]eparator test (coordinated movement using both Meca robots)
@@ -1535,7 +1540,7 @@ Welcome to BatteryLab! Please select a command:
             crimper_robot_command_loop(batterylab.crimper_robot)
         elif user_input == "b":
             _recipes_batch_menu(batterylab)
-        elif user_input == "o":
+        elif user_input == "d":
             try:
                 batterylab.assemble_a_battery()
             except Exception as e:
@@ -1558,6 +1563,8 @@ def main():
     try:
         command_loop(batterylab)
     finally:
+        batterylab.liquid_robot.disconnect()
+        print("MG400 disconnected safely.")
         batterylab.destroy_node()
         rclpy.shutdown()
 
