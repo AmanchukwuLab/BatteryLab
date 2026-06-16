@@ -3,10 +3,13 @@
     "recipe_name": "demo_mix_cell_01",
     "target_electrolyte": {
       "name": "demo_mix_cell_01_target",
-      "volume": 0.05,
+      "volume": 50.0,
       "v": {
         "water": 0.25,
-        "ethanol": 0.75
+        "propylene glycol": 0.75
+      },
+      "s": {
+        "H2SO4": 0.4
       }
     }
   }

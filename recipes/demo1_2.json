@@ -1,0 +1,16 @@
+[
+  {
+    "recipe_name": "demo_mix_cell_00",
+    "target_electrolyte": {
+      "name": "demo_mix_cell_00_target",
+      "volume": 50.0,
+      "v": {
+        "water": 0.5,
+        "propylene glycol": 0.5
+      },
+      "s": {
+        "H2SO4": 0.4
+      }
+    }
+  }
+]

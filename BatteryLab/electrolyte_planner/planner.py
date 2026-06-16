@@ -28,10 +28,12 @@ def _serialize_model(model: FormulationPlan) -> dict:
 
 
 def _sort_vials(vials: Sequence[VialContents]) -> List[VialContents]:
+    """Sort vials by (x_ind, y_ind) for deterministic allocation order."""
     return sorted(vials, key=lambda item: (item.x_ind, item.y_ind))
 
 
 def _build_solvency_bank(inventory: Inventory) -> List[Electrolyte]:
+    """Convert inventory vials to a list of solvency Electrolyte objects for planning."""
     bank: List[Electrolyte] = []
     for vial in inventory.vials:
         if vial.current_electrolyte is not None:
@@ -40,9 +42,10 @@ def _build_solvency_bank(inventory: Inventory) -> List[Electrolyte]:
     
 
 
-def _resolve_solvency_required_volumes(
+def _resolve_required_volumes(
     inventory: Inventory, request: FormulationRequest
 ) -> Dict[str, float]:
+    """Determine how much volume of each stock solution is needed for the target electrolyte."""
     bank   = _build_solvency_bank(inventory)
     target = request.target_electrolyte.to_solvency()
 
@@ -52,16 +55,10 @@ def _resolve_solvency_required_volumes(
         required_by_solution[solution_name] = fraction * (request.target_electrolyte.volume)
     return required_by_solution
 
-
-def _resolve_required_volumes(
-    inventory: Inventory, request: FormulationRequest
-) -> Dict[str, float]:
-    return _resolve_solvency_required_volumes(inventory, request)
-
-
 def _allocate_from_vials(
     vials: Sequence[VialContents], solution_name: str, required_volume_ul: float
 ) -> List[tuple[int, int, str, float]]:
+    """Determine which vials to draw from and how much for each to meet the required volume."""
     remaining = required_volume_ul
     transfers: List[tuple[int, int, str, float]] = []
 
@@ -84,6 +81,7 @@ def _consume_solution_from_vials(
     solution_name: str,
     required_volume_ul: float,
 ) -> List[VialUsageRecord]:
+    """Update vial volumes to reflect consumption and return usage records for any vials that were drawn from."""
     remaining = required_volume_ul
     usage_records: List[VialUsageRecord] = []
     for vial in _sort_vials(vials):
@@ -107,6 +105,7 @@ def _consume_solution_from_vials(
             )
 
         if vial.volume_ul <= 0:
+            # TODO: consider adding a warning if volume is negative. This would indicate a bug in the planner
             vial.volume_ul = 0.0
             # Preserve history to support cleaning/reuse decisions.
             vial.previous_electrolyte = vial.current_electrolyte
@@ -172,6 +171,7 @@ def plan_formulation(inventory: Inventory, request: FormulationRequest) -> Formu
         )
     total_required_volume_ul = sum(required_by_solution.values())
 
+    # Confirm that inventory can meet required volumes before generating instructions
     for solution_name, required_volume in required_by_solution.items():
         available_volume = inventory.available_volume(solution_name)
         if available_volume < required_volume:
@@ -196,6 +196,7 @@ def plan_formulation(inventory: Inventory, request: FormulationRequest) -> Formu
             vial_usage=[],
         )
 
+    # No issues found, so generate instructions to return
     for solution_name, required_volume in required_by_solution.items():
         transfers = _allocate_from_vials(
             inventory.vials,
