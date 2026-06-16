@@ -1,0 +1,6 @@
+source;share/BatteryLab/hook/pythonpath.ps1
+source;share/BatteryLab/hook/pythonpath.dsv
+source;share/BatteryLab/hook/pythonpath.sh
+source;../../build/BatteryLab/share/BatteryLab/hook/pythonpath_develop.ps1
+source;../../build/BatteryLab/share/BatteryLab/hook/pythonpath_develop.dsv
+source;../../build/BatteryLab/share/BatteryLab/hook/pythonpath_develop.sh

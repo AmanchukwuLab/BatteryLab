@@ -1,0 +1,26 @@
+{
+  "Anode": {
+    "details": "uk"
+  },
+  "AnodeCase": {
+    "details": "uk"
+  },
+  "Cathode": {
+    "details": "uk"
+  },
+  "CathodeCase": {
+    "details": "unknown'"
+  },
+  "Separator": {
+    "details": "ik"
+  },
+  "Spacer": {
+    "details": "uk'"
+  },
+  "SpacerExtra": {
+    "details": "uk"
+  },
+  "Washer": {
+    "details": "unknown'"
+  }
+}

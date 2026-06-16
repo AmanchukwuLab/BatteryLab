@@ -240,8 +240,10 @@ def e_solver(
 
     # Composition constraints
     for i in range(len(S_compounds)):
+        # Restraint: base solvent volume fractions must be met
         prob += pulp.lpSum(S[i, j] * v_vars[j] for j in range(n)) == t1[i]
     for i in range(len(M_compounds)):
+        # Restraint: salt/additive molarities must be met
         prob += pulp.lpSum(M[i, j] * v_vars[j] for j in range(n)) == t2[i]
 
     # Fractions should sum to 1 (final mixture fully specified)
@@ -249,7 +251,7 @@ def e_solver(
 
     # Link binary usage with fractions using Big-M and epsilon.
     for j in range(n):
-        prob += v_vars[j] <= big_m * e_bin[j]
+        prob += v_vars[j] <= big_m * e_bin[j] 
         prob += v_vars[j] >= eps * e_bin[j]
 
     prob.solve(pulp.PULP_CBC_CMD(msg=False))

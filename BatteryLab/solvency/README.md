@@ -2,10 +2,15 @@
 This package implements a linear solver (PuLP) for solution systems with mixed component types. It is intended for use in finding mixtures of solvents where some components are specified by molarity (salts, additives) and others by absolute volume- or volume fraction-based quantities (solvent mixtures).
 
 # Solution setup
-For some specified final composition $\vec{v}_{\text{final}}$ and $\vec{m}_{\text{final}}$, the goal is to find the set of volume fractions $\vec{v}_{\text{components}}$ of some minimal set of the electrolytes available that yield the final composition. The available electrolyte solutions are represented as a volume fraction matrix, $\bold{S}$, and a molarity matrix, $\bold{M}$, such that
-$$\bold{S}\vec{v}_{\text{components}}=\vec{v}_{\text{final}},$$ and 
-$$\bold{M}\vec{v}_{\text{components}}=\vec{m}_{\text{final}}$$
-where $M_{i,j}$ is the concentration (mol/L) of component $i$ in available electrolyte $j$, and $S_{i,j}$ is the volume fraction of the same. In it's current formulation, $M_{i,j}$ and $S_{i,j}$ should not be simultaneously populated.
+For some specified final composition $`\vec{v}_{\text{final}}`$ and $`\vec{m}_{\text{final}}`$, the goal is to find the set of volume fractions $`\vec{v}_{\text{components}}`$ of some minimal set of the electrolytes available that yield the final composition. The available electrolyte solutions are represented as a volume fraction matrix, $`\bold{S}`$, and a molarity matrix, $`\bold{M}`$, such that
+```math
+\bold{S}\vec{v}_{\text{components}}=\vec{v}_{\text{final}},
+``` 
+and 
+```math
+\bold{M}\vec{v}_{\text{components}}=\vec{m}_{\text{final}}
+```
+where $`M_{i,j}`$ is the concentration (mol/L) of component $i$ in available electrolyte $j$, and $S_{i,j}$ is the volume fraction of the same. In it's current formulation, $`M_{i,j}`$ and $`S_{i,j}`$ should not be simultaneously populated.
 
 This system is then solved using a linear optimizer that aims to use as few electrolytes as possible to mix the final composition.
 

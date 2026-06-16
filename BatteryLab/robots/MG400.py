@@ -352,7 +352,7 @@ class MG400:
             self.dashboard.SpeedL(3)
             self.movectl.MovL(*self.liquid_poses_down[self.get_liquid_index(x, y)])
             self.movectl.Sync()
-            # TODO: level sensing and ensure the liquid is enough
+            # TODO: level sensing and ensure the liquid is enough # not sure our hardware can do this...
             # self.logger.info(f"The current liquid level: {self.sartorius_rline.tellLevel()}")
             
             self.sartorius_rline.aspirate(volume)
@@ -407,6 +407,13 @@ class MG400:
             raise ValueError(
                 f"Liquid y-coordinate out of bounds: y={y}, valid range is [0, {self.liquid_n-1}]"
             )
+
+    def _validate_volume(self, volume):
+        """Validate that the volume is a positive integer."""
+        if not isinstance(volume, int):
+            raise ValueError(f"Volume must be an integer, got {type(volume).__name__}")
+        if volume <= 0:
+            raise ValueError(f"Volume must be a positive integer, got {volume}")
 
     def get_tip_index(self, x, y):
         return x * self.tip_n + y

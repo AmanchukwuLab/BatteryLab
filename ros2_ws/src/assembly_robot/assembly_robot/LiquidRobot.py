@@ -4,6 +4,7 @@ from rclpy.node import Node
 from BatteryLab.robots.MG400 import MG400, main_loop
 from sartorius.sartorius_client import SartoriusClient
 
+MAX_PIPETTE_VOLUME = 200 # in microliters, per equipment specs
 
 class LiquidRobot(Node):
     def __init__(self, ip="192.168.0.107", logger=None):
@@ -57,6 +58,69 @@ def manual_position_loop(liquid_robot: LiquidRobot):
         print(f"The robot is moving with MovJ to cartesian coordinates {parameters}")
         liquid_robot.MG400.movectl.MovJ(*parameters)
 
+def get_tip_coords():
+    while True:
+        print("Enter 'q' to quit.")
+        x_input = input("Please input tip index x: ").strip().replace('.', '')
+        y_input = input("Please input tip index y: ").strip().replace('.', '')
+        if x_input == 'q' or y_input == 'q':
+            return None, None
+        try:
+            x = int(x_input)
+            y = int(y_input)
+            if x < 0 or y < 0:
+                print("Invalid input. Please enter non-negative values.")
+                continue
+            else:
+                if x >= 8: # TODO: check these!
+                    print("Invalid input. Tip index x must be less than 8.")
+                    continue
+                if y >= 12:
+                    print("Invalid input. Tip index y must be less than 12.")
+                    continue
+            return x, y
+        except ValueError:
+            print("Invalid input. Please enter numeric values.")
+
+def get_liquid_coords():
+    while True:
+        print("Enter 'q' to quit.")
+        x_input = input("Please input liquid bottle index x: ").strip().replace('.', '')
+        y_input = input("Please input liquid bottle index y: ").strip().replace('.', '')
+        if x_input == 'q' or y_input == 'q':
+            return None, None
+        try:
+            x = int(x_input)
+            y = int(y_input)
+            if x < 0 or y < 0:
+                print("Invalid input. Please enter non-negative values.")
+                continue
+            else:
+                if x >= 4:
+                    print("Invalid input. Liquid bottle index x must be less than 4.")
+                    continue
+                if y >= 4:
+                    print("Invalid input. Liquid bottle index y must be less than 4.")
+                    continue
+            return x, y
+        except ValueError:
+            print("Invalid input. Please enter numeric values.")
+
+def get_volume():
+    """Ensure that the user inputs a valid positive integer for volume."""
+    while True:
+        print("Enter 'q' to quit.")
+        volume_input = input("Please input volume (positive integer): ").strip()
+        if volume_input == 'q':
+            return None
+        try:
+            volume = int(volume_input)
+            if volume > 0 and volume <= MAX_PIPETTE_VOLUME:
+                return volume
+            else:
+                print(f"Invalid input. Volume must be a positive integer between 1 and {MAX_PIPETTE_VOLUME}.")
+        except ValueError:
+            print("Invalid input. Please enter a positive integer for volume.")
 
 def liquid_robot_command_loop(liquidRobot: LiquidRobot):
     prompt = """Press [Enter] to quit,
@@ -87,37 +151,39 @@ def liquid_robot_command_loop(liquidRobot: LiquidRobot):
             elif input_str == "M":
                 choice = input("Please select which case to go (tip/liquid):")
                 if choice == "tip":
-                    x = int(input("Please input tip index x:").strip())
-                    y = int(input("Please input tip index y:").strip())
-                    liquidRobot.MG400.move_to_tip_case(x, y)
+                    x, y = get_tip_coords()
+                    if x is not None and y is not None:
+                        liquidRobot.MG400.move_to_tip_case(x, y)
                 elif choice == "liquid":
-                    x = int(input("Please input liquid bottle index x:").strip())
-                    y = int(input("Please input liquid bottle index y:").strip())
-                    liquidRobot.MG400.move_to_liquid(x, y)
+                    x, y = get_liquid_coords()
+                    if x is not None and y is not None:
+                        liquidRobot.MG400.move_to_liquid(x, y)
                 else:
-                    print("Your choice is invalid!")
+                    print("Invalid choice!")
             elif input_str == "G":
-                x = int(input("Please input tip index x:").strip())
-                y = int(input("Please input tip index y:").strip())
-                liquidRobot.MG400.get_tip(x, y)
+                x, y = get_tip_coords()
+                if x is not None and y is not None:
+                    liquidRobot.MG400.get_tip(x, y)
             elif input_str == "D":
-                x = int(input("Please input tip index x:").strip())
-                y = int(input("Please input tip index y:").strip())
-                liquidRobot.MG400.drop_tip(x, y)
+                x, y = get_tip_coords()
+                if x is not None and y is not None:
+                    liquidRobot.MG400.drop_tip(x, y)
             elif input_str == "R":
-                x = int(input("Please input liquid bottle index x:").strip())
-                y = int(input("Please input liquid bottle index y:").strip())
-                liquidRobot.MG400.return_liquid(x, y)
+                x, y = get_liquid_coords()
+                if x is not None and y is not None:
+                    liquidRobot.MG400.return_liquid(x, y)
             elif input_str == "J":
-                volume = int(input("Please input volume:").strip())
-                liquidRobot.MG400.add_liquid_to_post(volume)
+                volume = get_volume()
+                if volume is not None:
+                    liquidRobot.MG400.add_liquid_to_post(volume)
             elif input_str == "S":
                 liquidRobot.MG400.move_to_assemble_post()
             elif input_str == "A":
-                x = int(input("Please input liquid bottle index x:").strip())
-                y = int(input("Please input liquid bottle index y:").strip())
-                volume = int(input("Please input volume:").strip())
-                liquidRobot.MG400.get_liquid(x, y, volume)
+                x, y = get_liquid_coords()
+                if x is not None and y is not None:
+                    volume = get_volume()
+                    if volume is not None:
+                        liquidRobot.MG400.get_liquid(x, y, volume)
             elif input_str == "P":
                 liquidRobot.MG400.parse_position_file()
                 print("Reloaded MG400 positions from the configuration file.")
