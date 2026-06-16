@@ -150,7 +150,8 @@ def plan_formulation(inventory: Inventory, request: FormulationRequest) -> Formu
     step_index = 1
     try:
         required_by_solution = _resolve_required_volumes(inventory, request)
-    except ValueError:
+    except ValueError as ve:
+        print(f"Error resolving required volumes: {ve}")
         target_volume_ul = (request.target_electrolyte.volume)
         return FormulationPlan(
             feasible=False,
@@ -169,6 +170,7 @@ def plan_formulation(inventory: Inventory, request: FormulationRequest) -> Formu
             vial_alerts=[],
             vial_usage=[],
         )
+    
     total_required_volume_ul = sum(required_by_solution.values())
 
     # Confirm that inventory can meet required volumes before generating instructions
