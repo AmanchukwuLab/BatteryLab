@@ -1,6 +1,0 @@
-[console_scripts]
-app = assembly_robot.app:main
-assembly_robot = assembly_robot.AssemblyRobot:main
-crimper_robot = assembly_robot.CrimperRobot:main
-liquid_robot = assembly_robot.LiquidRobot:main
-test_yaml_path = assembly_robot.test_yaml_path:main

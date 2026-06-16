@@ -1,0 +1,17 @@
+package.xml
+setup.cfg
+setup.py
+resource/sartorius
+sartorius/__init__.py
+sartorius/sartorius_client.py
+sartorius/sartorius_server.py
+sartorius.egg-info/PKG-INFO
+sartorius.egg-info/SOURCES.txt
+sartorius.egg-info/dependency_links.txt
+sartorius.egg-info/entry_points.txt
+sartorius.egg-info/requires.txt
+sartorius.egg-info/top_level.txt
+sartorius.egg-info/zip-safe
+test/test_copyright.py
+test/test_flake8.py
+test/test_pep257.py

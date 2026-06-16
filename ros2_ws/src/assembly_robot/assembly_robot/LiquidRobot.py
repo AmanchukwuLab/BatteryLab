@@ -179,11 +179,18 @@ def liquid_robot_command_loop(liquidRobot: LiquidRobot):
             elif input_str == "S":
                 liquidRobot.MG400.move_to_assemble_post()
             elif input_str == "A":
+<<<<<<< HEAD
                 x, y = get_liquid_coords()
                 if x is not None and y is not None:
                     volume = get_volume()
                     if volume is not None:
                         liquidRobot.MG400.get_liquid(x, y, volume)
+=======
+                x = int(input("Please input liquid bottle index x:").strip())
+                y = int(input("Please input liquid bottle index y:").strip())
+                volume = float(input("Please input volume:").strip())
+                liquidRobot.MG400.get_liquid(x, y, volume)
+>>>>>>> 057afcf6ddaded7378307362c59cc0f9964c62b4
             elif input_str == "P":
                 liquidRobot.MG400.parse_position_file()
                 print("Reloaded MG400 positions from the configuration file.")
@@ -192,8 +199,10 @@ def liquid_robot_command_loop(liquidRobot: LiquidRobot):
     except KeyboardInterrupt:
         print("Program interrupted by user.")
     finally:
-        liquidRobot.disconnect()
-        print("MG400 disconnected safely.")
+        #liquidRobot.disconnect()
+        #print("MG400 disconnected safely.")
+        pass # the above lines were causing errors when the liquid robot menu was used 
+             # before assembly: there isn't a provision to re-connect to the liquid robot.
 
 
 def liquid_robot_example():
@@ -203,6 +212,8 @@ def liquid_robot_example():
         print("Failed to initialize the Liquid Robot, program aborted!")
         exit()
     liquid_robot_command_loop(liquid_robot)
+    liquid_robot.disconnect()
+    print("MG400 disconnected safely.")
 
 
 def main():

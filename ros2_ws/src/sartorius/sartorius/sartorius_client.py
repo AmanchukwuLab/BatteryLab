@@ -14,7 +14,7 @@ class SartoriusClient(Node, SartoriusRLineInterface):
     
     def send_request(self, command, volume=0) -> rclpy.task.Future:
         self.sartorius_ctrl_request.command = command
-        self.sartorius_ctrl_request.volume = volume
+        self.sartorius_ctrl_request.volume = int(round(volume)) #TODO: does this mean that the pipetting robot can only accept integer values of volume? In that vein, what is the volume resolution of the hardware itself?
         return self.sartorius_ctrl_cli.call_async(self.sartorius_ctrl_request)
     
     def handle_request_result(self, future):
