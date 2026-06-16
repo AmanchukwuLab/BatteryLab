@@ -1,6 +1,0 @@
-source;share/suction_pump/hook/pythonpath.ps1
-source;share/suction_pump/hook/pythonpath.dsv
-source;share/suction_pump/hook/pythonpath.sh
-source;share/suction_pump/hook/ament_prefix_path.ps1
-source;share/suction_pump/hook/ament_prefix_path.dsv
-source;share/suction_pump/hook/ament_prefix_path.sh

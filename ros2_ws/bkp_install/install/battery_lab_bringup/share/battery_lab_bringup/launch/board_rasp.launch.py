@@ -1,1 +1,0 @@
-/home/yuanjian/Research/BatteryLab/ros2_ws/src/battery_lab_bringup/launch/board_rasp.launch.py

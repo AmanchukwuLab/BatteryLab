@@ -1,1 +1,0 @@
-/home/yuanjian/Research/BatteryLab/ros2_ws/build/battery_lab_bringup/ament_cmake_core/battery_lab_bringupConfig-version.cmake
