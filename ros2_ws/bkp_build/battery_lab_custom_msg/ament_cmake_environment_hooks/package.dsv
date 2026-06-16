@@ -1,4 +1,0 @@
-source;share/battery_lab_custom_msg/local_setup.bash
-source;share/battery_lab_custom_msg/local_setup.dsv
-source;share/battery_lab_custom_msg/local_setup.sh
-source;share/battery_lab_custom_msg/local_setup.zsh

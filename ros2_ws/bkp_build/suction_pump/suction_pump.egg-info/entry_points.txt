@@ -1,3 +1,0 @@
-[console_scripts]
-suction_pump_client = suction_pump.suction_client:main
-suction_pump_server = suction_pump.suction_server:main
