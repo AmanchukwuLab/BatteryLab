@@ -150,12 +150,8 @@ An example recipe file (for the [B]atch option) looks like this:
     "target_electrolyte": {
       "name": "baseline_target",
       "volume": 0.05,
-      "v": {"water": 0.5, "ethanol": 0.5}
+      "v": {"water": 0.5, "propylene glycol": 0.5}
     },
-    "available_electrolytes": [
-      {"name": "water_stock", "volume": 0.15, "v": {"water": 1.0}},
-      {"name": "ethanol_stock", "volume": 0.15, "v": {"ethanol": 1.0}}
-    ]
   }
 ]
 ```

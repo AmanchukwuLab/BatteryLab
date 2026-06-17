@@ -19,7 +19,7 @@ from BatteryLab.electrolyte_planner import evaluate_formulation
 inventory = {
     "vials": [
         {"x_ind": 0, "y_ind": 0, "current_electrolyte": {"name": "water_stock", "v": {"water": 1.0}}, "volume_ul": 800},
-        {"x_ind": 0, "y_ind": 1, "current_electrolyte": {"name": "ethanol_stock", "v": {"ethanol": 1.0}}, "volume_ul": 800},
+        {"x_ind": 0, "y_ind": 1, "current_electrolyte": {"name": "PG_stock", "v": {"propylene glycol": 1.0}}, "volume_ul": 800},
     ]
 }
 
@@ -28,7 +28,7 @@ request = {
     "target_electrolyte": {
         "name": "baseline_target",
         "volume": 0.05,
-        "v": {"water": 0.5, "ethanol": 0.5},
+        "v": {"water": 0.5, "propylene glycol": 0.5},
     }
 }
 

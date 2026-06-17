@@ -63,7 +63,6 @@ class FormulationRequest(BaseModel):
 
     recipe_name: str = Field(..., min_length=1)
     target_electrolyte: ElectrolyteSpec
-    available_electrolytes: List[ElectrolyteSpec] = Field(default_factory=list)
 
     @validator("recipe_name")
     def _strip_text(cls, value: str) -> str:

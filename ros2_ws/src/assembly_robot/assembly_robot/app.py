@@ -190,7 +190,6 @@ def _recipe_metadata_snapshot(recipe: dict) -> dict:
     return {
         "recipe_name": str(recipe.get("recipe_name", "")).strip(),
         "target_electrolyte": recipe.get("target_electrolyte"),
-        "available_electrolytes": recipe.get("available_electrolytes", []),
     }
 
 
@@ -572,7 +571,7 @@ class BatterySessionTracker:
         if self.session_dir is not None:
             return
 
-        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.session_id = datetime.now().strftime("%m%d_%H%M")
         self.session_dir = self.session_root / f"session_{self.session_id}"
         self.lookup_image_dir = self.session_dir / "images"
 
