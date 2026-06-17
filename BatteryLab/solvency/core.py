@@ -41,7 +41,7 @@ class Electrolyte:
         s: Optional[Dict[str, float]] = None,
         a: Optional[Dict[str, float]] = None,
         local_smiles: Optional[Dict[str, str]] = None,
-        use_pubchem: bool = False,
+        use_pubchem: bool = True,
     ) -> None:
         v = v or {}
         s = s or {}

@@ -1,3 +1,4 @@
+import numpy as np
 import csv
 import json
 import re
@@ -5,6 +6,8 @@ import statistics
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Sequence
+import tkinter as _tk
+from tkinter import filedialog as _filedlg
 
 import cv2
 import rclpy
@@ -32,6 +35,8 @@ from BatteryLab.electrolyte_planner import (
     VIAL_MAX_VOLUME_UL,
 )
 from BatteryLab.robots.Constants import Components
+
+LAST_RECIPE_DIR_PATH = Path.home() / ".batterylab" / "last_recipe_dir.txt"
 
 
 def _component_slug(component_name: str) -> str:
@@ -195,7 +200,7 @@ def _electrolyte_spec_dump(spec: ElectrolyteSpec) -> dict:
     return spec.dict()
 
 
-def _read_electrolyte_spec_or_cancel(prompt: str) -> Optional[dict]:
+def _read_electrolyte_spec_or_cancel(prompt: str="\n") -> Optional[dict]:
     print(prompt)
     print("""The following information is required to specify an electrolyte: 
     name (for user reference)
@@ -775,6 +780,7 @@ class AutoBatteryLab(Node):
 
         logger = self.get_logger()
         total_recipes = len(recipes)
+        success_record = np.zeros(total_recipes, dtype=bool)
         for recipe_index, recipe in enumerate(recipes, start=1):
             recipe_name = str(recipe.get("recipe_name", f"recipe_{recipe_index}"))
             logger.info(
@@ -802,6 +808,14 @@ class AutoBatteryLab(Node):
                 recipe_source_path=recipe_source_path,
                 batch_component_metadata=batch_component_metadata,
             )
+            success_record[recipe_index - 1] = True
+            logger.info(f"Finished assembly for recipe '{recipe_name}'")
+        
+        logger.info("\n\n=========================\nAssembly completed. Success record:")
+        for recipe_index, (recipe, success) in enumerate(zip(recipes, success_record), start=1):
+            recipe_name = str(recipe.get("recipe_name", f"recipe_{recipe_index}"))
+            status = "SUCCESS" if success else "FAILED"
+            logger.info(f"  {recipe_index}/{total_recipes}: {recipe_name} — {status}")
 
     def put_a_component_on_assembly_post(
         self,
@@ -1146,7 +1160,7 @@ Electrolyte Planner Menu
                 print(f"An error occurred while checking vial contents: {e}. Proceeding with add/update operation.")
                 pass
 
-            electrolyte_payload = _read_electrolyte_spec_or_cancel("\n")
+            electrolyte_payload = _read_electrolyte_spec_or_cancel()
             if electrolyte_payload is None:
                 print("Canceled add/update operation.")
                 continue
@@ -1352,17 +1366,12 @@ Tip Management Menu
             continue
         print("The choice is not valid. Please try again.")
 
-
-def _recipes_batch_menu(batterylab: AutoBatteryLab):
-    logger = batterylab.get_logger()
+def get_recipe_file_path():
     recipes_path = input("Enter path to recipes JSON file (or type 'f' to open file chooser): ").strip()
-    # Support opening a GUI file chooser and remember last-used folder
-    LAST_RECIPE_DIR_PATH = Path.home() / ".batterylab" / "last_recipe_dir.txt"
+    
+    # Attempt to use GUI file chooser if user types 'f', but fall back to text input if there's any issue with the GUI
     if recipes_path.lower() == "f":
         try:
-            import tkinter as _tk
-            from tkinter import filedialog as _filedlg
-
             # Initialize TK root in a safe/hidden way
             _root = _tk.Tk()
             _root.withdraw()
@@ -1387,7 +1396,7 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
 
             if not filename:
                 print("Canceled.")
-                return
+                return False  # signal cancellation with False
             recipes_path = str(filename)
             # Persist last folder
             try:
@@ -1399,6 +1408,14 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
         except Exception as e:
             print(f"File chooser unavailable: {e}. Falling back to text input.")
             recipes_path = input("Enter path to recipes JSON file: ").strip()
+    
+    return recipes_path
+
+def _recipes_batch_menu(batterylab: AutoBatteryLab):
+    logger = batterylab.get_logger()
+
+    # Get path to recipe file
+    recipes_path = get_recipe_file_path()
     if not recipes_path:
         print("Canceled.")
         return
@@ -1510,6 +1527,74 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
         logger.error(f"Batch assembly failed: {e}")
         print(f"Error: {e}")
 
+def _create_recipe_file(name, volume, v, s={}, a={}, local_smiles={}, use_pubchem=True):
+    """Auxiliary function to create a recipe JSON file from user inputs"""
+    recipe_path = get_recipe_file_path()
+    if not recipe_path:
+        print("Canceled.")
+        return
+    
+    # if filename ends in json, confirm overwrite if file exists
+    if recipe_path.endswith(".json"):
+        recipe_file = Path(recipe_path)
+        if recipe_file.exists():
+            confirm = input(f"File {recipe_file} already exists. Overwrite? (y/n): ").strip().lower()
+            if confirm != "y":
+                print("Canceled.")
+                return
+        else:
+            # If file doesn't exist, we'll create it, but ensure the directory exists first
+            try:
+                recipe_file.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                print(f"Failed to create directory for recipe file: {e}")
+                return
+    else:
+        recipe_file = Path(recipe_path) + f"recipe_{name}.json"
+        # Ensure the directory exists
+        try:
+            recipe_file.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            print(f"Failed to create directory for recipe file: {e}")
+            return
+    
+    # Create the recipe and save it
+    try:
+        recipe = {
+            'recipe_name': name,
+            'target_electrolyte': {
+                'name': name,
+                'volume': volume, 
+                'v': v, 
+                's': s, 
+                'a': a,
+                'local_smiles': local_smiles,
+                'use_pubchem': use_pubchem,
+            }
+        }
+        with recipe_file.open('w', encoding='utf-8') as f:
+            json.dump(recipe, f, indent=4)
+        print(f"Recipe saved to {recipe_file}")
+    except Exception as e: 
+        print(f"Failed to save recipe file: {e}")
+
+def create_recipe_interactive():
+    """Create a JSON recipe file through interactive user inputs in the terminal"""
+    payload = _read_electrolyte_spec_or_cancel()
+    if payload is None:
+        print("Canceled recipe creation.")
+        return
+    
+    name = payload['name']
+    volume = payload['volume']
+    v = payload['v']
+    s = payload['s']
+    a = payload['a']
+    local_smiles = payload['local_smiles']
+    use_pubchem = payload['use_pubchem']
+
+    _create_recipe_file(name, volume, v, s, a, local_smiles, use_pubchem)
+    return None
 
 def command_loop(batterylab: AutoBatteryLab):
     prompt = """
@@ -1520,6 +1605,7 @@ Welcome to BatteryLab! Please select a command:
 [L]iquid   robot submenu
 [C]rimper  robot submenu
 [B]atch recipes file input to assemble series of batteries
+[R]ecipe creation (interactive)
 [D]emo battery (single assembly using defaults and no recipe)
 [E]lectrolyte vial manager
 [T]ip (pipette) manager
@@ -1540,6 +1626,8 @@ Welcome to BatteryLab! Please select a command:
             crimper_robot_command_loop(batterylab.crimper_robot)
         elif user_input == "b":
             _recipes_batch_menu(batterylab)
+        elif user_input == "r":
+            create_recipe_interactive()
         elif user_input == "d":
             try:
                 batterylab.assemble_a_battery()
