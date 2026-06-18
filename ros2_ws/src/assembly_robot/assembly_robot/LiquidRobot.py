@@ -179,11 +179,18 @@ def liquid_robot_command_loop(liquidRobot: LiquidRobot):
             elif input_str == "S":
                 liquidRobot.MG400.move_to_assemble_post()
             elif input_str == "A":
+<<<<<<< HEAD
                 x, y = get_liquid_coords()
                 if x is not None and y is not None:
                     volume = get_volume()
                     if volume is not None:
                         liquidRobot.MG400.get_liquid(x, y, volume)
+=======
+                x = int(input("Please input liquid bottle index x:").strip())
+                y = int(input("Please input liquid bottle index y:").strip())
+                volume = int(input("Please input volume:").strip())
+                liquidRobot.MG400.get_liquid(x, y, volume)
+>>>>>>> 744e6fe (Local changes to LiquidRobot.py before pulling)
             elif input_str == "P":
                 liquidRobot.MG400.parse_position_file()
                 print("Reloaded MG400 positions from the configuration file.")
