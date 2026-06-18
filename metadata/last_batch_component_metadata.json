@@ -1,0 +1,26 @@
+{
+  "Anode": {
+    "details": "copper"
+  },
+  "AnodeCase": {
+    "details": "unknown"
+  },
+  "Cathode": {
+    "details": "aluminum"
+  },
+  "CathodeCase": {
+    "details": "unknown"
+  },
+  "Separator": {
+    "details": "waxpaper"
+  },
+  "Spacer": {
+    "details": "unknown"
+  },
+  "SpacerExtra": {
+    "details": "unknown"
+  },
+  "Washer": {
+    "details": "unknown"
+  }
+}

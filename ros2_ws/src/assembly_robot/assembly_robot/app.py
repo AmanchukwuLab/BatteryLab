@@ -1365,7 +1365,9 @@ Tip Management Menu
             continue
         print("The choice is not valid. Please try again.")
 
-def get_recipe_file_path():
+def get_recipe_file_path(goal='file'):
+    """"Determine location of recipes JSON file, or get a folder in which to place a new recipe file.
+    Parameter 'goal' can be either 'file' (default) or 'folder' to indicate the intent."""
     recipes_path = input("Enter path to recipes JSON file (or type 'f' to open file chooser): ").strip()
     
     # Attempt to use GUI file chooser if user types 'f', but fall back to text input if there's any issue with the GUI
@@ -1383,11 +1385,25 @@ def get_recipe_file_path():
             except Exception:
                 initial_dir = None
 
-            filename = _filedlg.askopenfilename(
-                title="Select recipes JSON file",
-                initialdir=initial_dir or str(Path.cwd()),
-                filetypes=[("JSON files", "*.json"), ("All files", "*")],
-            )
+            if goal == 'file':
+                filename = _filedlg.askopenfilename(
+                    title="Select recipes JSON file",
+                    initialdir=initial_dir or str(Path.cwd()),
+                    filetypes=[("JSON files", "*.json"), ("All files", "*")],
+                )
+            elif goal == 'folder':
+                filename = _filedlg.askdirectory(
+                    title="Select folder to save new recipes JSON file",
+                    initialdir=initial_dir or str(Path.cwd()),
+                )
+            else:
+                print(f"Invalid goal '{goal}' for get_recipe_file_path. Defaulting to file selection.")
+                filename = _filedlg.askopenfilename(
+                    title="Select recipes JSON file",
+                    initialdir=initial_dir or str(Path.cwd()),
+                    filetypes=[("JSON files", "*.json"), ("All files", "*")],
+                )
+            
             try:
                 _root.destroy()
             except Exception:
@@ -1528,34 +1544,19 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
 
 def _create_recipe_file(name, volume, v, s={}, a={}, local_smiles={}, use_pubchem=True):
     """Auxiliary function to create a recipe JSON file from user inputs"""
-    recipe_path = get_recipe_file_path()
+    recipe_path = get_recipe_file_path(goal='folder')
     if not recipe_path:
         print("Canceled.")
         return
-    
-    # if filename ends in json, confirm overwrite if file exists
-    if recipe_path.endswith(".json"):
-        recipe_file = Path(recipe_path)
-        if recipe_file.exists():
-            confirm = input(f"File {recipe_file} already exists. Overwrite? (y/n): ").strip().lower()
-            if confirm != "y":
-                print("Canceled.")
-                return
-        else:
-            # If file doesn't exist, we'll create it, but ensure the directory exists first
-            try:
-                recipe_file.parent.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                print(f"Failed to create directory for recipe file: {e}")
-                return
-    else:
-        recipe_file = Path(recipe_path) + f"recipe_{name}.json"
-        # Ensure the directory exists
-        try:
-            recipe_file.parent.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            print(f"Failed to create directory for recipe file: {e}")
-            return
+
+    # Combine directory with recipe name
+    recipe_file = Path(recipe_path) / f"{name}_RMI.json"
+    # Ensure the directory exists
+    try:
+        recipe_file.parent.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        print(f"Failed to create directory for recipe file: {e}")
+        return
     
     # Create the recipe and save it
     try:

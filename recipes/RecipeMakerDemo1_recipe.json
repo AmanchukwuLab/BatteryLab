@@ -1,0 +1,15 @@
+{
+    "recipe_name": "RecipeMakerDemo1",
+    "target_electrolyte": {
+        "name": "RecipeMakerDemo1",
+        "volume": 50.0,
+        "v": {
+            "water": 0.15,
+            "propylene glycol": 0.65
+        },
+        "s": {},
+        "a": {},
+        "local_smiles": {},
+        "use_pubchem": true
+    }
+}
