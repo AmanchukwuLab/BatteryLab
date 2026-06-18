@@ -4,6 +4,7 @@ from launch.actions import SetEnvironmentVariable, DeclareLaunchArgument
 from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
 from pathlib import Path
+from launch.actions import ExecuteProcess
 
 
 def generate_launch_description():
@@ -13,7 +14,7 @@ def generate_launch_description():
         cmd=[[
             'v4l2-ctl -d /dev/video0 ',
             '--set-ctrl=focus_automatic_continuous=0 ',
-            '--set-ctrl=focus_absolute=500 '
+            '--set-ctrl=focus_absolute=500' 
         ]],
         shell=True
     )
@@ -43,7 +44,11 @@ def generate_launch_description():
                 executable="camera_server",
                 name="look_up_camera_server",
                 output="screen",
-                parameters=[{"service_name": "/batterylab/lookup_camera"}],
+                parameters=[
+                    {
+                        "service_name": "/batterylab/lookup_camera",
+                    }
+                ],
             ),
             Node(
                 package="sartorius",
