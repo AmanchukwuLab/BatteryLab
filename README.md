@@ -162,3 +162,9 @@ We may eventually develop a web-based UI for easier control with a graphical int
 
 ## Further Documentation
 Further documentation (including troubleshooting, known issues, and how-to's) can be found in the `docs` subfolder.
+
+## Acknowledgements
+This system was based on the initial version of the ["AutoBASS" system](https://github.com/Helge-Stein-Group/AutoBASS) developed by Dr. Helge Stein's group at the Technical University of Munich. Some initial published works featuring the system include [Digital Discovery, 2024,3, 1342-1349](https://doi.org/10.1039/D4DD00002A) and [Digital Discovery, 2022,1, 755-762](https://doi.org/10.1039/D2DD00046F).
+
+The construction of the [Amanchukwu Lab](https://amanchukwu.uchicago.edu/)'s version of that system was initially led by [Yuanjian Liu](https://github.com/legendperceptor/), including hardware development and initial codebase modifications. Later work by [Jared Porter](https://github.com/jwp91) focused on machine vision correction, electrolyte recipe management, as well as UI and hardware interface improvements.
+
