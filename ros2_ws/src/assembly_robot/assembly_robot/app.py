@@ -901,7 +901,11 @@ class AutoBatteryLab(Node):
         Similarly, the `demo` flag (default: False) can be used to demonstrate the system
         using a default 'recipe' of 0 uL from the vial at (0, 0). """
 
-        name = recipe.get("name", "<unnamed>") if not demo else "DEMO"
+        if demo:
+            name = "DEMO"
+        else:
+            name = recipe.get("name", "<unnamed>")
+            
         logger = self.get_logger()
         extra = "SIMULATING:  " if mime else ""
         logger.info(f"----- {extra}Dispensing electrolyte recipe {name}-----")
@@ -1094,13 +1098,30 @@ class AutoBatteryLab(Node):
         recipe_source_path: Optional[str] = None,
         batch_component_metadata: Optional[dict] = None,
         demo:Optional[bool] = False,
+        order: Optional[int] = 0
     ):
+        """Assemble a battery according to the provided recipe, following these steps.
+        Optional int 'order' can be used to skip to a specific step:
+        0. Put the Cathode Case
+        1. Put the Washer
+        2. Put the Spacer
+        3. Put the Cathode
+        4. Put the Separator
+        5. Add the electrolyte according to the recipe (if provided) using the liquid handler
+        6. Put the Anode
+        7. Put the Spacer(2)
+        8. Put the Anode Case
+        """
         battery_record = self.session_tracker.start_battery(
             recipe=recipe,
             recipe_index=recipe_index,
             recipe_source_path=recipe_source_path,
-            batch_component_metadata=batch_component_metadata,
+            batch_component_metadata=batch_component_metadata
         )
+        # 'order' param should only be used during a demo
+        if not demo:
+            order = 0
+        
         # Prepare all the robots and home them
         try:
             rail_pos = self.assembly_robot.get_rail_pos()
@@ -1112,207 +1133,244 @@ class AutoBatteryLab(Node):
                 self.assembly_robot.move_home_and_out_of_way()
             self.liquid_robot.move_home()
             self.crimper_robot.move_home()
-            order = 0
-            # 1. Put a Cathode Case on the assembly post
-            self.put_a_component_on_assembly_post(
-                Components.CathodeCase, order, battery_record=battery_record
-            )
-            order += 1
-            # 2. Put the Washer
-            self.put_a_component_on_assembly_post(
-                Components.Washer, order, battery_record=battery_record
-            )
-            order += 1
-            # 3. Put the Spacer
-            self.put_a_component_on_assembly_post(
-                Components.Spacer, order, battery_record=battery_record
-            )
-            order += 1
-            # 4. Put the Cathode
-            self.put_a_component_on_assembly_post(
-                Components.Cathode, order, battery_record=battery_record
-            )
-            order += 1
-            # 5. Put the Separator
-            self.put_a_component_on_assembly_post(
-                Components.Separator, order, battery_record=battery_record
-            )
-            order += 1
-            # 6. Add the electrolyte - (1) Move assembly robot out of the way
-            self.assembly_robot.move_home_and_out_of_way(home=8.0)
-            rail_pos = self.assembly_robot.get_rail_pos()
-            if rail_pos == -1 or rail_pos > 10:
-                raise RuntimeError(
-                    "The current linear rail pos cannot be cleared! Check the status!"
+
+            if order == 0:
+                # 1. Put a Cathode Case on the assembly post
+                self.put_a_component_on_assembly_post(
+                    Components.CathodeCase, order, battery_record=battery_record
                 )
-            # 6.(2) Add electrolyte using planner instructions when recipe provided
-            self.liquid_robot.MG400.move_home()
-            try:
-                # Load tip rack and select an appropriate tip
+                order += 1
+            else:
+                print("Skipping the first component.")
+            
+            if order == 1:
+                # 2. Put the Washer
+                self.put_a_component_on_assembly_post(
+                    Components.Washer, order, battery_record=battery_record
+                )
+                order += 1
+            else:
+                print("Skipping the second component.")
+            
+            if order == 2:
+                # 3. Put the Spacer
+                self.put_a_component_on_assembly_post(
+                    Components.Spacer, order, battery_record=battery_record
+                )
+                order += 1
+            else:
+                print("Skipping the third component.")
+
+            if order == 3:
+                # 4. Put the Cathode
+                self.put_a_component_on_assembly_post(
+                    Components.Cathode, order, battery_record=battery_record
+                )
+                order += 1
+            else:
+                print("Skipping the fourth component.")
+
+            if order == 4:
+                # 5. Put the Separator
+                self.put_a_component_on_assembly_post(
+                    Components.Separator, order, battery_record=battery_record
+                )
+                order += 1
+            else:
+                print("Skipping the fifth component.")
+            
+            if order == 5:
+                # 6. Add the electrolyte - (1) Move assembly robot out of the way
+                self.assembly_robot.move_home_and_out_of_way(home=8.0)
+                rail_pos = self.assembly_robot.get_rail_pos()
+                if rail_pos == -1 or rail_pos > 10:
+                    raise RuntimeError(
+                        "The current linear rail pos cannot be cleared! Check the status!"
+                    )
+                # 6.(2) Add electrolyte using planner instructions when recipe provided
+                self.liquid_robot.MG400.move_home()
                 try:
-                    tip_rack = load_tip_rack_state()
-                except Exception as e:
-                    self.get_logger().error(f"Error loading tip rack: {e}")
-                    self.session_tracker.finish_battery(battery_record, status="failed_tip_rack")
-                    return
+                    # Load tip rack and select an appropriate tip
+                    try:
+                        tip_rack = load_tip_rack_state()
+                    except Exception as e:
+                        self.get_logger().error(f"Error loading tip rack: {e}")
+                        self.session_tracker.finish_battery(battery_record, status="failed_tip_rack")
+                        return
 
-                # if recipe is None or not recipe.get("target_electrolyte"):
-                #     print("No solvency electrolyte recipe provided. Using default demo behavior.")
-                #     # This should only happen during a demo (no recipe)
-                #     volume_to_get = self._electrolyte_volume_for_recipe(recipe)
-                #     # default to the first vial for a demo
-                #     liquid_x, liquid_y = 0, 0
-                #     try: 
-                #         substance_name = inventory.solution_at(liquid_x, liquid_y)
-                #     except Exception:
-                #         substance_name = None
-                #     tip_index = _tip_index_for_substance_or_error(tip_rack, substance_name)
-                #     tip_x, tip_y = _tip_index_to_coordinates(tip_index)
-                    
-                #     self.liquid_robot.MG400.get_tip(tip_x, tip_y)
-                #     self.liquid_robot.MG400.get_liquid(liquid_x, liquid_y, volume_to_get)
-                #     self.liquid_robot.MG400.add_liquid_to_post(volume_to_get)
-                #     self.liquid_robot.MG400.return_liquid(liquid_x, liquid_y)
-                #     self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
-                #     self.liquid_robot.MG400.move_home()
-                    
-                #     # Mark tip as used for unknown substance
-                #     tip_rack.mark_tip_used(tip_index, substance_name)
-                #     save_tip_rack_state(tip_rack)
-                if demo:
-                    self.dispense_electrolyte_recipe(recipe={}, demo=True)
-                else:
-                    self.dispense_electrolyte_recipe(recipe)
-                    # # Use electrolyte planner to allocate from vials and update inventory
-                    # inventory = load_inventory_state()
-
-                    # try:
-                    #     plan = evaluate_formulation(inventory, recipe)
-                    # except Exception as e:
-                    #     self.get_logger().error(f"Error evaluating formulation: {e}")
-                    #     self.session_tracker.finish_battery(battery_record, status="failed_evaluation")
-                    #     return
-
-                    # if not plan.get("feasible", False):
-                    #     issues = plan.get("issues", [])
-                    #     self.get_logger().error(
-                    #         f"Formulation not feasible for recipe '{recipe.get('recipe_name')}', issues: {issues}"
-                    #     )
-                    #     self.session_tracker.finish_battery(battery_record, status="failed_feasibility")
-                    #     return
-
-                    # instructions = plan.get("instructions", [])
-                    # if not instructions:
-                    #     self.get_logger().error(f"No instructions generated for recipe '{recipe.get('recipe_name')}'")
-                    #     self.session_tracker.finish_battery(battery_record, status="failed_instructions")
-                    #     return
-
-                    # # Re-home liquid robot before starting
-                    # self.liquid_robot.MG400.move_home()
-                    
-                    # # Execute instructions, getting a fresh tip each time the substance changes
-                    # current_substance = None
-                    # tip_index = None
-                    # tip_x = None
-                    # tip_y = None
-
-                    # for instr in instructions:
-                    #     sx = int(instr.get("source_x_ind", 0))
-                    #     sy = int(instr.get("source_y_ind", 0))
-                    #     src = instr.get("source_solution")
-                    #     vol = float(instr.get("volume_ul", 0.0))
-                    #     if vol == 0:
-                    #         continue
-                    #     elif vol < 0:
-                    #         self.get_logger().warning(f"Invalid volume for substance {current_substance} at vial ({sx}, {sy}): {vol}")
-                    #         continue
+                    # if recipe is None or not recipe.get("target_electrolyte"):
+                    #     print("No solvency electrolyte recipe provided. Using default demo behavior.")
+                    #     # This should only happen during a demo (no recipe)
+                    #     volume_to_get = self._electrolyte_volume_for_recipe(recipe)
+                    #     # default to the first vial for a demo
+                    #     liquid_x, liquid_y = 0, 0
+                    #     try: 
+                    #         substance_name = inventory.solution_at(liquid_x, liquid_y)
+                    #     except Exception:
+                    #         substance_name = None
+                    #     tip_index = _tip_index_for_substance_or_error(tip_rack, substance_name)
+                    #     tip_x, tip_y = _tip_index_to_coordinates(tip_index)
                         
-                    #     # Check if substance changed; if so, drop current tip and get a new one
-                    #     if src != current_substance:
-                    #         # Drop the current tip if we have one
-                    #         if tip_index is not None:
-                    #             try:
-                    #                 self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
-                    #             except Exception as e:
-                    #                 self.get_logger().error(f"Error dropping tip: {e}")
-                    #             tip_rack.mark_tip_used(tip_index, current_substance)
-
-                    #         # Get a new tip for the new substance
-                    #         current_substance = src
-                    #         try:
-                    #             tip_index = _tip_index_for_substance_or_error(tip_rack, current_substance)
-                    #             tip_x, tip_y = _tip_index_to_coordinates(tip_index)
-                    #         except Exception as e:
-                    #             self.get_logger().error(f"Error getting tip for substance {current_substance}: {e}")
-                    #             continue
-
-                    #         try:
-                    #             self.liquid_robot.MG400.get_tip(tip_x, tip_y)
-                    #         except Exception as e:
-                    #             self.get_logger().error(f"Error getting tip: {e}")
-                    #             continue
-
-                    #     # Aspirate from source vial and dispense to assembly post
-                    #     self.liquid_robot.MG400.get_liquid(sx, sy, vol)
-                    #     self.liquid_robot.MG400.add_liquid_to_post(vol)
-                    #     # Blowout/return to source to clear the tip
-                    #     self.liquid_robot.MG400.return_liquid(sx, sy)
-
-                    #     # Consume liquid from inventory in-memory only after successful aspiration
-                    #     try:
-                    #         inventory.consume_solution_from_vial(sx, sy, vol)
-                    #         try:
-                    #             save_inventory_state(inventory)
-                    #         except Exception as e:
-                    #             self.get_logger().warning(f"Failed to save updated inventory: {e}")
-                    #     except Exception as e:
-                    #         self.get_logger().warning(f"Failed to consume solution from digital vial: {e}")
-                        
-                    #     # Build vial alerts and update inventory state in-memory after each instruction to reflect changes for subsequent instructions in the same recipe
-                    #     try:
-                    #         alerts = inventory.update_vial_alerts()
-                    #         # log alerts if any
-                    #         if alerts:
-                    #             for ind, alert in enumerate(alerts):
-                    #                 self.get_logger().warning(f"Vial alert {ind+1}: {alert}")
-                    #         else: 
-                    #             self.get_logger().info("No vial alerts found for this step. Continuing...")
-                    #     except Exception as e:
-                    #         self.get_logger().warning(f"Failed to update vial alerts: {e}")
-                        
-                    #     # Save the updated inventory state
-                    #     try:
-                    #         save_inventory_state(inventory)
-                    #     except Exception as e:
-                    #         self.get_logger().warning(f"Failed to save updated inventory: {e}")
-
-                    # # Drop the final tip and mark as used
-                    # if tip_index is not None:
+                    #     self.liquid_robot.MG400.get_tip(tip_x, tip_y)
+                    #     self.liquid_robot.MG400.get_liquid(liquid_x, liquid_y, volume_to_get)
+                    #     self.liquid_robot.MG400.add_liquid_to_post(volume_to_get)
+                    #     self.liquid_robot.MG400.return_liquid(liquid_x, liquid_y)
                     #     self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
-                    #     tip_rack.mark_tip_used(tip_index, current_substance)
-                    
-                    # self.liquid_robot.MG400.move_home()
-                    # save_tip_rack_state(tip_rack)
+                    #     self.liquid_robot.MG400.move_home()
+                        
+                    #     # Mark tip as used for unknown substance
+                    #     tip_rack.mark_tip_used(tip_index, substance_name)
+                    #     save_tip_rack_state(tip_rack)
+                    if demo:
+                        self.dispense_electrolyte_recipe(recipe={}, demo=True)
+                    else:
+                        self.dispense_electrolyte_recipe(recipe)
+                        # # Use electrolyte planner to allocate from vials and update inventory
+                        # inventory = load_inventory_state()
 
-                    
-            except Exception:
-                self.session_tracker.finish_battery(battery_record, status="failed")
-                raise
-            # 7. Put the Anode
-            self.put_a_component_on_assembly_post(
-                Components.Anode, order, battery_record=battery_record
-            )
-            order += 1
-            # 8. Put the SpacerExtra
-            self.put_a_component_on_assembly_post(
-                Components.SpacerExtra, order, battery_record=battery_record
-            )
-            order += 1
-            # 9. Put the AnodeCase
-            self.put_a_component_on_assembly_post(
-                Components.AnodeCase, order, battery_record=battery_record
-            )
-            order += 1
+                        # try:
+                        #     plan = evaluate_formulation(inventory, recipe)
+                        # except Exception as e:
+                        #     self.get_logger().error(f"Error evaluating formulation: {e}")
+                        #     self.session_tracker.finish_battery(battery_record, status="failed_evaluation")
+                        #     return
+
+                        # if not plan.get("feasible", False):
+                        #     issues = plan.get("issues", [])
+                        #     self.get_logger().error(
+                        #         f"Formulation not feasible for recipe '{recipe.get('recipe_name')}', issues: {issues}"
+                        #     )
+                        #     self.session_tracker.finish_battery(battery_record, status="failed_feasibility")
+                        #     return
+
+                        # instructions = plan.get("instructions", [])
+                        # if not instructions:
+                        #     self.get_logger().error(f"No instructions generated for recipe '{recipe.get('recipe_name')}'")
+                        #     self.session_tracker.finish_battery(battery_record, status="failed_instructions")
+                        #     return
+
+                        # # Re-home liquid robot before starting
+                        # self.liquid_robot.MG400.move_home()
+                        
+                        # # Execute instructions, getting a fresh tip each time the substance changes
+                        # current_substance = None
+                        # tip_index = None
+                        # tip_x = None
+                        # tip_y = None
+
+                        # for instr in instructions:
+                        #     sx = int(instr.get("source_x_ind", 0))
+                        #     sy = int(instr.get("source_y_ind", 0))
+                        #     src = instr.get("source_solution")
+                        #     vol = float(instr.get("volume_ul", 0.0))
+                        #     if vol == 0:
+                        #         continue
+                        #     elif vol < 0:
+                        #         self.get_logger().warning(f"Invalid volume for substance {current_substance} at vial ({sx}, {sy}): {vol}")
+                        #         continue
+                            
+                        #     # Check if substance changed; if so, drop current tip and get a new one
+                        #     if src != current_substance:
+                        #         # Drop the current tip if we have one
+                        #         if tip_index is not None:
+                        #             try:
+                        #                 self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
+                        #             except Exception as e:
+                        #                 self.get_logger().error(f"Error dropping tip: {e}")
+                        #             tip_rack.mark_tip_used(tip_index, current_substance)
+
+                        #         # Get a new tip for the new substance
+                        #         current_substance = src
+                        #         try:
+                        #             tip_index = _tip_index_for_substance_or_error(tip_rack, current_substance)
+                        #             tip_x, tip_y = _tip_index_to_coordinates(tip_index)
+                        #         except Exception as e:
+                        #             self.get_logger().error(f"Error getting tip for substance {current_substance}: {e}")
+                        #             continue
+
+                        #         try:
+                        #             self.liquid_robot.MG400.get_tip(tip_x, tip_y)
+                        #         except Exception as e:
+                        #             self.get_logger().error(f"Error getting tip: {e}")
+                        #             continue
+
+                        #     # Aspirate from source vial and dispense to assembly post
+                        #     self.liquid_robot.MG400.get_liquid(sx, sy, vol)
+                        #     self.liquid_robot.MG400.add_liquid_to_post(vol)
+                        #     # Blowout/return to source to clear the tip
+                        #     self.liquid_robot.MG400.return_liquid(sx, sy)
+
+                        #     # Consume liquid from inventory in-memory only after successful aspiration
+                        #     try:
+                        #         inventory.consume_solution_from_vial(sx, sy, vol)
+                        #         try:
+                        #             save_inventory_state(inventory)
+                        #         except Exception as e:
+                        #             self.get_logger().warning(f"Failed to save updated inventory: {e}")
+                        #     except Exception as e:
+                        #         self.get_logger().warning(f"Failed to consume solution from digital vial: {e}")
+                            
+                        #     # Build vial alerts and update inventory state in-memory after each instruction to reflect changes for subsequent instructions in the same recipe
+                        #     try:
+                        #         alerts = inventory.update_vial_alerts()
+                        #         # log alerts if any
+                        #         if alerts:
+                        #             for ind, alert in enumerate(alerts):
+                        #                 self.get_logger().warning(f"Vial alert {ind+1}: {alert}")
+                        #         else: 
+                        #             self.get_logger().info("No vial alerts found for this step. Continuing...")
+                        #     except Exception as e:
+                        #         self.get_logger().warning(f"Failed to update vial alerts: {e}")
+                            
+                        #     # Save the updated inventory state
+                        #     try:
+                        #         save_inventory_state(inventory)
+                        #     except Exception as e:
+                        #         self.get_logger().warning(f"Failed to save updated inventory: {e}")
+
+                        # # Drop the final tip and mark as used
+                        # if tip_index is not None:
+                        #     self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
+                        #     tip_rack.mark_tip_used(tip_index, current_substance)
+                        
+                        # self.liquid_robot.MG400.move_home()
+                        # save_tip_rack_state(tip_rack)
+
+                        
+                except Exception:
+                    self.session_tracker.finish_battery(battery_record, status="failed")
+                    raise
+                order += 1
+            else:
+                print("Skipping electrolyte dispensing.")
+
+            if order == 6:
+                # 7. Put the Anode
+                self.put_a_component_on_assembly_post(
+                    Components.Anode, order, battery_record=battery_record
+                )
+                order += 1
+            else:
+                print("Skipping anode placement.")
+
+            if order == 7:
+                # 8. Put the SpacerExtra
+                self.put_a_component_on_assembly_post(
+                    Components.SpacerExtra, order, battery_record=battery_record
+                )
+                order += 1
+            else:
+                print("Skipping spacer extra placement.")
+            
+            if order == 8:
+                # 9. Put the AnodeCase
+                self.put_a_component_on_assembly_post(
+                    Components.AnodeCase, order, battery_record=battery_record
+                )
+                order += 1
+            else:
+                print("Skipping anode case placement.")
+            
             self.assembly_robot.move_home_and_out_of_way()
             rail_pos = self.assembly_robot.get_rail_pos()
             if rail_pos == -1 or rail_pos > 35:
@@ -1914,8 +1972,34 @@ Welcome to BatteryLab! Please select a command:
         elif user_input == "r":
             create_recipe_interactive()
         elif user_input == "d":
+            # Get optional input to start from a certain step
+            print("\n\n\nDemo mode: the system will run through a battery assembly using default settings and a placeholder recipe. You can choose to start from a specific step or run through the full process.")
+            print("""Steps:
+        0. Put the Cathode Case
+        1. Put the Washer
+        2. Put the Spacer
+        3. Put the Cathode
+        4. Put the Separator
+        5. Add the electrolyte according to the recipe (if provided) using the liquid handler
+        6. Put the Anode
+        7. Put the Spacer(2)
+        8. Put the Anode Case""")
+            valid_inputs = [str(i) for i in range(9)]
+            valid_inputs.append('q')
+            validated = False
+            while not validated:
+                user_input = input("Enter the step number to start from (0-8) or 'q' to quit and cancel the operation: ").strip().lower()
+                if user_input in valid_inputs:
+                    validated = True
+                else:
+                    print("Invalid input. Please try again.")
+            if user_input == 'q':
+                print("Operation cancelled.")
+                continue
             try:
-                batterylab.assemble_a_battery()
+                step_start = int(user_input)
+                print(f"Starting at step {step_start}...")
+                batterylab.assemble_a_battery(demo=True, order=step_start)
             except Exception as e:
                 batterylab.get_logger().error(f"Battery assembly failed: {e}")
         elif user_input == "e":
