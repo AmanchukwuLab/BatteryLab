@@ -1933,6 +1933,8 @@ def main():
 
     try:
         command_loop(batterylab)
+    except Exception as e:
+        print(f"An error occurred: {e}")
     finally:
         batterylab.liquid_robot.disconnect()
         print("MG400 disconnected safely.")
