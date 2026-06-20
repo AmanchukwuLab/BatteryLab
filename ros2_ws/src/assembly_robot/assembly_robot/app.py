@@ -414,6 +414,7 @@ def _simulate_recipe_execution(recipe: dict, inventory: Inventory) -> None:
     print(" - Drop tip (simulated)")
     print(f"--- End simulation for recipe: {name} ---\n")
 
+
 class BatterySessionTracker:
     LARGE_ADJUSTMENT_STATIC_THRESHOLD = 1.0
     LARGE_ADJUSTMENT_MIN_SAMPLES = 5
@@ -970,7 +971,6 @@ class AutoBatteryLab(Node):
         logger.info(f"----- Finished recipe {name} -----\n")
 
 
-
     def assemble_a_battery(
         self,
         recipe: Optional[dict] = None,
@@ -1135,8 +1135,10 @@ class AutoBatteryLab(Node):
 def _is_cancel(value: str) -> bool:
     return value.strip().lower() in {"q", "x", "cancel"}
 
+
 def _is_confirm(value: str) -> bool:
     return value.strip().lower() in {"y", "yes", "confirm"}
+
 
 def _read_non_negative_int_or_cancel(prompt: str):
     while True:
@@ -1425,6 +1427,7 @@ Tip Management Menu
             continue
         print("The choice is not valid. Please try again.")
 
+
 def get_recipe_file_path(goal='file'):
     """"Determine location of recipes JSON file, or get a folder in which to place a new recipe file.
     Parameter 'goal' can be either 'file' (default) or 'folder' to indicate the intent."""
@@ -1485,6 +1488,7 @@ def get_recipe_file_path(goal='file'):
             recipes_path = input("Enter path to recipes JSON file: ").strip()
     
     return recipes_path
+
 
 def _recipes_batch_menu(batterylab: AutoBatteryLab):
     logger = batterylab.get_logger()
@@ -1605,6 +1609,7 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
         logger.error(f"Batch assembly failed: {e}")
         print(f"Error: {e}")
 
+
 def _create_recipe_file(name, volume, v, s={}, a={}, local_smiles={}, use_pubchem=True):
     """Auxiliary function to create a recipe JSON file from user inputs"""
     recipe_path = get_recipe_file_path(goal='folder')
@@ -1641,6 +1646,7 @@ def _create_recipe_file(name, volume, v, s={}, a={}, local_smiles={}, use_pubche
     except Exception as e: 
         print(f"Failed to save recipe file: {e}")
 
+
 def create_recipe_interactive():
     """Create a JSON recipe file through interactive user inputs in the terminal"""
     payload = _read_electrolyte_spec_or_cancel()
@@ -1658,6 +1664,7 @@ def create_recipe_interactive():
 
     _create_recipe_file(name, volume, v, s, a, local_smiles, use_pubchem)
     return None
+
 
 def command_loop(batterylab: AutoBatteryLab):
     prompt = """

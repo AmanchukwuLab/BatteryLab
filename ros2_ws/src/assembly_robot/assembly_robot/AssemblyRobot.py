@@ -37,12 +37,10 @@ from suction_pump.suction_client import SuctionPumpClient
 
 class ComponentRunOutError(Exception):
     """The error indicates the component has run out and requires a refill"""
-
     pass
 
 
 class AssemblyRobot(Node):
-
     def __init__(self, logger=None, robot_address="192.168.0.100"):
         super().__init__("assembly_robot")
         self.suction_pump_client = SuctionPumpClient()
@@ -91,9 +89,11 @@ class AssemblyRobot(Node):
         )
         self.lookup_tuning_dir.mkdir(parents=True, exist_ok=True)
 
+
     def save_counter_config(self):
         with open(self.counter_file, "w") as f:
             yaml.dump(self.component_current_counter_dict, f)
+
 
     def load_counter_config(self):
         if self.counter_file.exists():
@@ -109,6 +109,7 @@ class AssemblyRobot(Node):
                 self.save_counter_config()
         else:
             print("You don't have an existing config, will start from scratch")
+
 
     def load_position_files(self):
         # First, create position constants based on manually taught positions from YAML files
@@ -145,6 +146,7 @@ class AssemblyRobot(Node):
             )
         )
 
+
     def initialize_and_home_robots(self):
         self.load_position_files()
 
@@ -164,6 +166,7 @@ class AssemblyRobot(Node):
         self.rail_meca500.robot.WaitGripperMoveCompletion(5)
         self.logger.info("The gripper is functioning properly!")
 
+
     def get_rail_pos(self) -> float:
         future = self.zaber_rail.send_get_pos_request()
         while rclpy.ok():
@@ -177,6 +180,7 @@ class AssemblyRobot(Node):
                 else:
                     return response.current_pos
         return -1
+
 
     def get_next_well_of_component(
         self, component_name, given_available_index: int = None
@@ -216,9 +220,11 @@ class AssemblyRobot(Node):
             available_locations[current_sublocation_index],
         )
 
+
     def move_home_and_out_of_way(self, home: float = 30.0):
         self.rail_meca500.move_home(tool=RobotTool.SUCTION)
         self.move_zaber_rail(home)
+
 
     def move_zaber_rail(self, rail_pos: float):
         self.logger.info(f"Assembly Robot Moving to {rail_pos}")
@@ -241,6 +247,7 @@ class AssemblyRobot(Node):
                 break
         # make sure the move is finished
         self.get_logger().debug(f"Assembly Robot move request finished")
+
 
     def drop_current_component_to_assembly_post(
         self,
@@ -366,6 +373,7 @@ class AssemblyRobot(Node):
             "lookup_image": lookup_image,
         }
 
+
     def calibrate_machine_vision(self, force=False):
         """Used to:
         1) take a picture and find the center of the suction cup (in pixels)
@@ -490,6 +498,7 @@ class AssemblyRobot(Node):
         self.move_home_and_out_of_way()
         return None
 
+
     def take_a_look_up_photo(self, dx=0, dy=0, rehome=True, midpoint=True):
         """Homes the rail_meca500's arm position, moves to the lookup camera, then takes and returns a photo.
 
@@ -562,6 +571,7 @@ class AssemblyRobot(Node):
         image = self.look_up_camera_client.get_image()
         return image
 
+
     def take_a_tray_photo(self, component_name: str):
         component_dict = getattr(self.assemblyRobotCameraConstants, component_name)
         rail_pos = component_dict["rail_pos"]
@@ -583,6 +593,7 @@ class AssemblyRobot(Node):
         )
         # self.arm_camera_client.display_image()
         return self.arm_camera_client.get_image()
+
 
     def grab_component(
         self,
@@ -617,6 +628,7 @@ class AssemblyRobot(Node):
             home_after=home_after,
         )
 
+
     def manual_adjustment(
         self, rail_position, grab_position, level: float = 1, component_name="suction"
     ):
@@ -634,11 +646,13 @@ class AssemblyRobot(Node):
         self.logger.debug(f"Assembly Robot will move for manual adjustment soon.")
         self.rail_meca500.move_to_pick_position(grab_position, level=level)
 
+
     def _manual_mode_offset_limits(self, use_pick_position: bool):
         """Return conservative per-axis jog limits for manual positioning."""
         if use_pick_position:
             return np.array([20.0, 20.0, 8.0, 0.0, 0.0, 0.0], dtype=float)
         return np.array([20.0, 20.0, 20.0, 0.0, 0.0, 0.0], dtype=float)
+
 
     def _clamp_pose_to_limits(
         self,
@@ -660,6 +674,7 @@ class AssemblyRobot(Node):
                 "Manual jog target exceeded soft limits and was clamped to a safer pose."
             )
         return clamped.tolist()
+
 
     def _move_to_manual_base_pose(
         self,
@@ -717,6 +732,7 @@ class AssemblyRobot(Node):
         self.rail_meca500.robot.MovePose(*approach_pose)
         self.rail_meca500.robot.WaitIdle(10)
         return approach_pose
+
 
     def manual_arm_control_mode(
         self,
@@ -907,6 +923,7 @@ i(input set step), v(toggle suction), q(quit).
                 self.logger.error(f"Failed to turn suction off while exiting manual mode: {e}")
         return current_pose
 
+
     def _get_corner_name_for_well_index(self, shape, well_index: int):
         """Map a row-major well index to one of the four YAML corner keys."""
         if len(shape) != 2:
@@ -919,6 +936,7 @@ i(input set step), v(toggle suction), q(quit).
             m * n - 1: "bottom_right",
         }
         return corner_map.get(int(well_index))
+
 
     def _apply_single_well_pose_in_memory(
         self,
@@ -938,6 +956,7 @@ i(input set step), v(toggle suction), q(quit).
                 f"Well index {well_index} out of range for {component_name}/{sub_location}."
             )
         subtray.grabPo[well_index] = list(adjusted_pose)
+
 
     def _persist_single_corner_pose_to_yaml(
         self,
@@ -980,6 +999,7 @@ i(input set step), v(toggle suction), q(quit).
         with open(position_file, "w") as f:
             yaml.safe_dump(manual_positions, f, sort_keys=False)
 
+
     def auto_grab_a_component_to_assembly_post(self, component_name: str):
         component = getattr(self.assemblyRobotConstants, component_name)
         available_locations = list(component.keys())
@@ -1007,19 +1027,6 @@ i(input set step), v(toggle suction), q(quit).
             component_name=component_name,
         )
 
-    def drop_component(
-        self,
-        drop_po,
-        component: Components,
-        nr: int,
-        auto_calib: bool = True,
-        grab_check: bool = True,
-        save_img: bool = True,
-        show_image: bool = False,
-    ):
-        """Drop the component to the assembly post with autocorrection"""
-        # TODO: add autocorrection on top of grab_component
-        pass
 
     def capture_lookup_images_for_all_components(self):
         """
@@ -1343,7 +1350,6 @@ def get_manual_core_location_from_user(robot):
     print(f"Selection '{selection}' is out of range.")
     return None
 
-
 def read_keypress() -> str:
     """Read one keypress, including terminal arrow escape sequences."""
     fd = sys.stdin.fileno()
@@ -1367,7 +1373,6 @@ def read_keypress() -> str:
         return key
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
 
 def assembly_robot_command_loop(
     robot: AssemblyRobot,
