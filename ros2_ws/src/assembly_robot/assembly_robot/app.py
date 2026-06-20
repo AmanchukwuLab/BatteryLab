@@ -903,11 +903,12 @@ class AutoBatteryLab(Node):
 
         if demo:
             name = "DEMO"
+            extra = "DEMO MODE:  "
         else:
             name = recipe.get("name", "<unnamed>")
+            extra = "SIMULATING:  " if mime else ""
             
         logger = self.get_logger()
-        extra = "SIMULATING:  " if mime else ""
         logger.info(f"----- {extra}Dispensing electrolyte recipe {name}-----")
 
         inventory = load_inventory_state()
@@ -930,7 +931,7 @@ class AutoBatteryLab(Node):
             # In demo mode, we'll use a default recipe
             logger.info("Running in demo mode with default 'recipe'.")
             try:
-                demo_solution = inventory.solution_at(0, 0)
+                demo_solution = {'name': inventory.solution_at(0, 0)}
             except:
                 # No solution loaded at (0, 0) yet, so create a dummy
                 demo_solution = {
@@ -1101,13 +1102,13 @@ class AutoBatteryLab(Node):
         order: Optional[int] = 0
     ):
         """Assemble a battery according to the provided recipe, following these steps.
-        Optional int 'order' can be used to skip to a specific step:
+        Optional int 'order' can be used to skip to a specific step ONLY during demo mode (i.e., if demo==True):
         0. Put the Cathode Case
         1. Put the Washer
         2. Put the Spacer
         3. Put the Cathode
         4. Put the Separator
-        5. Add the electrolyte according to the recipe (if provided) using the liquid handler
+        5. Add the electrolyte according to the demo recipe (no liquid)
         6. Put the Anode
         7. Put the Spacer(2)
         8. Put the Anode Case
