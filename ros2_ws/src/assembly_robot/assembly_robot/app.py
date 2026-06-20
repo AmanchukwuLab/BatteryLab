@@ -1072,7 +1072,7 @@ class AutoBatteryLab(Node):
             except Exception as e:
                 logger.error(f"Something went wrong while returning tip ({tip_x}, {tip_y}) and re-homing the robot.")
                 logger.warning("WARNING: remove tip before continuing to avoid collisions")
-                return
+                returnc
             # Mark the final tip as used to persist state across simulations
             tip_rack.mark_tip_used(tip_index, current_substance)
 
@@ -1790,12 +1790,14 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
                 try:
                     recipe_idx = int(selection) - 1
                     if 0 <= recipe_idx < len(recipes):
-                        batterylab.dispense_electrolyte_recipe(recipes[recipe_idx])
+                        batterylab.dispense_electrolyte_recipe(recipes[recipe_idx], mime=True)
                         #_simulate_recipe_execution_with_movements(recipes[recipe_idx], inventory, batterylab.liquid_robot)
                     else:
                         print(f"Invalid selection. Please enter a number between 1 and {len(recipes)}.")
                 except ValueError:
                     print("Invalid input. Please enter a recipe number or 'q'.")
+                except Exception as e:
+                    print(f"An error occurred: {e}")
             
             action = input("Proceed to assemble these recipes now? (y/n): ").strip().lower()
             if action != "y":
