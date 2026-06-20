@@ -76,65 +76,43 @@ def _allocate_from_vials(
     return transfers
 
 
-def _consume_solution_from_vials(
-    vials: List[VialContents],
-    solution_name: str,
-    required_volume_ul: float,
-) -> List[VialUsageRecord]:
-    """Update vial volumes to reflect consumption and return usage records for any vials that were drawn from."""
-    remaining = required_volume_ul
-    usage_records: List[VialUsageRecord] = []
-    for vial in _sort_vials(vials):
-        if remaining <= 0:
-            break
-        if vial.current_electrolyte is None or vial.current_electrolyte.name != solution_name:
-            continue
+# DEPRECATED: used in an older version of the planner
+# def _consume_solution_from_vials(
+#     vials: List[VialContents],
+#     solution_name: str,
+#     required_volume_ul: float,
+# ) -> List[VialUsageRecord]:
+#     """Update vial volumes to reflect consumption and return usage records for any vials that were drawn from."""
+#     remaining = required_volume_ul
+#     usage_records: List[VialUsageRecord] = []
+#     for vial in _sort_vials(vials):
+#         if remaining <= 0:
+#             break
+#         if vial.current_electrolyte is None or vial.current_electrolyte.name != solution_name:
+#             continue
 
-        draw_volume = min(vial.volume_ul, remaining)
-        vial.volume_ul -= draw_volume
-        remaining -= draw_volume
-        if draw_volume > 0:
-            usage_records.append(
-                VialUsageRecord(
-                    x_ind=vial.x_ind,
-                    y_ind=vial.y_ind,
-                    solution_name=solution_name,
-                    used_volume_ul=draw_volume,
-                    remaining_volume_ul=vial.volume_ul,
-                )
-            )
+#         draw_volume = min(vial.volume_ul, remaining)
+#         vial.volume_ul -= draw_volume
+#         remaining -= draw_volume
+#         if draw_volume > 0:
+#             usage_records.append(
+#                 VialUsageRecord(
+#                     x_ind=vial.x_ind,
+#                     y_ind=vial.y_ind,
+#                     solution_name=solution_name,
+#                     used_volume_ul=draw_volume,
+#                     remaining_volume_ul=vial.volume_ul,
+#                 )
+#             )
 
-        if vial.volume_ul <= 0:
-            # TODO: consider adding a warning if volume is negative. This would indicate a bug in the planner
-            vial.volume_ul = 0.0
-            # Preserve history to support cleaning/reuse decisions.
-            vial.previous_electrolyte = vial.current_electrolyte
-            vial.current_electrolyte = None
+#         if vial.volume_ul <= 0:
+#             # TODO: consider adding a warning if volume is negative. This would indicate a bug in the planner
+#             vial.volume_ul = 0.0
+#             # Preserve history to support cleaning/reuse decisions.
+#             vial.previous_electrolyte = vial.current_electrolyte
+#             vial.current_electrolyte = None
 
-    return usage_records
-
-
-def _build_vial_alerts(
-    vials: Sequence[VialContents],
-    empty_threshold_ul: float,
-) -> List[VialAlert]:
-    alerts: List[VialAlert] = []
-    for vial in _sort_vials(vials):
-        low_flag = vial.volume_ul <= vial.low_volume_threshold_ul
-        empty_flag = vial.volume_ul <= empty_threshold_ul
-        if low_flag or empty_flag:
-            alerts.append(
-                VialAlert(
-                    x_ind=vial.x_ind,
-                    y_ind=vial.y_ind,
-                    current_electrolyte=vial.current_electrolyte,
-                    previous_electrolyte=vial.previous_electrolyte,
-                    remaining_volume_ul=vial.volume_ul,
-                    low_volume_flag=low_flag,
-                    empty_or_unusable_flag=empty_flag,
-                )
-            )
-    return alerts
+#     return usage_records
 
 
 def plan_formulation(inventory: Inventory, request: FormulationRequest) -> FormulationPlan:
@@ -230,45 +208,46 @@ def plan_formulation(inventory: Inventory, request: FormulationRequest) -> Formu
     )
 
 
-def plan_and_update_vials(
-    inventory: Inventory,
-    request: FormulationRequest,
-    empty_threshold_ul: float = DEFAULT_EMPTY_VOLUME_THRESHOLD_UL,
-) -> FormulationPlan:
-    """Plan a formulation and update in-memory vial volumes.
+# def plan_and_update_vials(
+#     inventory: Inventory,
+#     request: FormulationRequest,
+#     empty_threshold_ul: float = DEFAULT_EMPTY_VOLUME_THRESHOLD_UL,
+# ) -> FormulationPlan:
+#     """Plan a formulation and update in-memory vial volumes.
 
-    This function mutates ``inventory.vials`` to represent post-dispense vial
-    state. It also returns vial alerts and a top-level low-volume flag so the
-    caller can surface warnings in the main application.
-    """
+#     This function mutates ``inventory.vials`` to represent post-dispense vial
+#     state. It also returns vial alerts and a top-level low-volume flag so the
+#     caller can surface warnings in the main application.
+#     """
 
-    plan = plan_formulation(inventory, request)
-    if not plan.feasible:
-        plan.vial_alerts = _build_vial_alerts(inventory.vials, empty_threshold_ul)
-        plan.low_volume_flag = any(
-            alert.low_volume_flag or alert.empty_or_unusable_flag
-            for alert in plan.vial_alerts
-        )
-        return plan
+#     plan = plan_formulation(inventory, request)
+#     if not plan.feasible:
+#         plan.vial_alerts = inventory.update_vial_alerts()
+#         plan.low_volume_flag = any(
+#             alert.low_volume_flag or alert.empty_or_unusable_flag
+#             for alert in plan.vial_alerts
+#         )
+#         return plan
 
-    required_by_solution = _resolve_required_volumes(inventory, request)
-    vial_usage_records: List[VialUsageRecord] = []
+#     required_by_solution = _resolve_required_volumes(inventory, request)
+#     vial_usage_records: List[VialUsageRecord] = []
 
-    for solution_name, required_volume in required_by_solution.items():
-        usage = _consume_solution_from_vials(inventory.vials, solution_name, required_volume)
-        vial_usage_records.extend(usage)
+#     for solution_name, required_volume in required_by_solution.items():
+#         usage = _consume_solution_from_vials(inventory.vials, solution_name, required_volume)
+#         vial_usage_records.extend(usage)
 
-    plan.vial_alerts = _build_vial_alerts(inventory.vials, empty_threshold_ul)
-    plan.vial_usage = vial_usage_records
-    plan.low_volume_flag = any(
-        alert.low_volume_flag or alert.empty_or_unusable_flag
-        for alert in plan.vial_alerts
-    )
-    return plan
+#     plan.vial_alerts = inventory.update_vial_alerts()
+#     plan.vial_usage = vial_usage_records
+#     plan.low_volume_flag = any(
+#         alert.low_volume_flag or alert.empty_or_unusable_flag
+#         for alert in plan.vial_alerts
+#     )
+#     return plan
 
 
 def evaluate_formulation(
-    inventory_data: Inventory | dict, request_data: FormulationRequest | dict
+    inventory_data: Inventory | dict, 
+    request_data: FormulationRequest | dict
 ) -> dict:
     """Convenience wrapper for JSON-like input and output."""
 
@@ -279,36 +258,13 @@ def evaluate_formulation(
         else FormulationRequest(**request_data)
     )
     plan = plan_formulation(inventory, request)
+
+    if not plan.feasible:
+        plan.vial_alerts = inventory.update_vial_alerts()
+        plan.low_volume_flag = any(
+            alert.low_volume_flag or alert.empty_or_unusable_flag
+            for alert in plan.vial_alerts
+        )
+        return plan
+    
     return _serialize_model(plan)
-
-
-def evaluate_formulation_with_vials(
-    inventory_data: Inventory | dict,
-    request_data: FormulationRequest | dict,
-    empty_threshold_ul: float = DEFAULT_EMPTY_VOLUME_THRESHOLD_UL,
-) -> dict:
-    """Evaluate feasibility, update vial inventory, and return alerts.
-
-    Output includes:
-    - normal feasibility result/instructions
-    - ``low_volume_flag`` for easy application-level warning handling
-    - ``vial_alerts`` with detailed per-vial state
-    """
-
-    inventory = (
-        inventory_data if isinstance(inventory_data, Inventory) else Inventory(**inventory_data)
-    )
-    request = (
-        request_data
-        if isinstance(request_data, FormulationRequest)
-        else FormulationRequest(**request_data)
-    )
-    plan = plan_and_update_vials(inventory, request, empty_threshold_ul=empty_threshold_ul)
-    payload = _serialize_model(plan)
-
-    # Include updated vial state so callers can persist it between sessions.
-    if hasattr(inventory, "model_dump"):
-        payload["updated_inventory"] = inventory.model_dump()
-    else:
-        payload["updated_inventory"] = inventory.dict()
-    return payload

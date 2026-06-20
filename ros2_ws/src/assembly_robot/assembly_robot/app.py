@@ -27,7 +27,6 @@ from BatteryLab.electrolyte_planner import (
     show_save_location,
     set_vial_contents,
     evaluate_formulation,
-    evaluate_formulation_with_vials,
     Inventory,
     load_tip_rack_state,
     save_tip_rack_state,
@@ -59,7 +58,7 @@ def _tip_index_to_coordinates(tip_index: int) -> tuple[int, int]:
     return x, y
 
 
-def _tip_index_for_substance_or_raise(
+def _tip_index_for_substance_or_error(
     tip_rack: TipRack, substance_name: Optional[str]
 ) -> int:
     tip_index = tip_rack.find_clean_tip_for_substance(substance_name)
@@ -373,6 +372,12 @@ def _simulate_recipe_execution(recipe: dict, inventory: Inventory) -> None:
     messages that mirror what the MG400 would do (tip pickup, aspirate from vial,
     dispense to assembly post, return tip).
     """
+    # Note: I initially thought of trying to merge this into 
+    # `dispense_electrolyte_recipe`, but I think it's cleaner to keep it separate. 
+    # This function is small enough as-is, and the printing interface looks cleaner
+    # in the CLI than the logger does for such long-form output. Further, the purpose
+    # of the logger is as a record of machine movements and assembly actions, so adding
+    # this kind of transient user-serving output there doesn't really make sense.
     name = recipe.get("recipe_name", "<unnamed>")
     print(f"\n--- Simulation for recipe: {name} ---")
     try:
@@ -388,11 +393,7 @@ def _simulate_recipe_execution(recipe: dict, inventory: Inventory) -> None:
     instructions = plan.get("instructions", [])
     if not instructions:
         # Fall back to a single-volume action if planner produced no instructions
-        target = recipe.get("target_electrolyte") or {}
-        vol = (float(target.get("volume", 0.0))) if target else 0
-        print(f"Simulate: Acquire tip (simulated)")
-        print(f"Simulate: Dispense {float(vol):.1f} uL to assembly post (single-vessel fallback)")
-        print(f"Simulate: Return/drop tip (simulated)")
+        print("Something went wrong: planner produced no instructions.")
         return
 
     print("Simulated pipetting instructions:")
@@ -404,6 +405,7 @@ def _simulate_recipe_execution(recipe: dict, inventory: Inventory) -> None:
         sy = instr.get("source_y_ind")
         src = instr.get("source_solution")
         vol = float(instr.get("volume_ul", 0.0) or 0.0)
+
         print(
             f"   Step {step}: move to vial ({sx},{sy}) containing '{src}' -> "
             f"aspirate {vol:.1f} uL of '{name_ing}' (simulated)"
@@ -414,108 +416,124 @@ def _simulate_recipe_execution(recipe: dict, inventory: Inventory) -> None:
     print(f"--- End simulation for recipe: {name} ---\n")
 
 
-def _simulate_recipe_execution_with_movements(recipe: dict, inventory: Inventory, liquid_robot) -> None:
-    """Simulate the recipe while commanding only MG400 movements (no aspirate/dispense).
+# def _simulate_recipe_execution_with_movements(recipe: dict, inventory: Inventory, liquid_robot) -> None:
+#     """Simulate the recipe while commanding only MG400 movements (no aspirate/dispense).
 
-    Behavior:
-    - Load the tip rack and select an appropriate tip based on substances used (like real assembly).
-    - Move the MG400 to acquire the correct tip (down then up) but do NOT call the aspirate
-      method used to physically pick a tip.
-    - Move (without descending) to each source vial location for the planned instructions.
-    - Return the tip to the tip rack (movement only, no eject).
-    """
-    # Get recipe, confirm feasibility
-    name = recipe.get("recipe_name", "<unnamed>")
-    print(f"\n--- Movement-simulation for recipe: {name} ---")
-    try:
-        plan = evaluate_formulation(inventory, recipe)
-    except Exception as e:
-        print(f"Failed to evaluate recipe '{name}': {e}")
-        return
+#     Behavior:
+#     - Load the tip rack and select an appropriate tip based on substances used (like real assembly).
+#     - Move the MG400 to acquire the correct tip (down then up) but do NOT call the aspirate
+#       method used to physically pick a tip.
+#     - Move (without descending) to each source vial location for the planned instructions.
+#     - Return the tip to the tip rack (movement only, no eject).
+#     """
+#     # Get recipe, confirm feasibility
+#     name = recipe.get("recipe_name", "<unnamed>")
+#     print(f"\n--- Movement-simulation for recipe: {name} ---")
+#     try:
+#         plan = evaluate_formulation(inventory, recipe)
+#     except Exception as e:
+#         print(f"Failed to evaluate recipe '{name}': {e}")
+#         return
 
-    if not plan.get("feasible", False):
-        print(f"Recipe '{name}' is NOT feasible. Issues: {plan.get('issues', [])}")
-        return
+#     if not plan.get("feasible", False):
+#         print(f"Recipe '{name}' is NOT feasible. Issues: {plan.get('issues', [])}")
+#         return
 
-    # Get instructions, connect to liquid handler
-    instructions = plan.get("instructions", [])
-    mg = liquid_robot.MG400
-    print("Re-homing liquid robot...")
-    mg.move_home()  # ensure we start from a known position
+#     # Get instructions
+#     instructions = plan.get("instructions", [])
+#     if not instructions:
+#         # Fall back to a single-volume action if planner produced no instructions
+#         print("Something went wrong: planner produced no instructions.")
+#         return
     
-    # Load tip rack and select an appropriate tip (matching real assembly behavior)
-    try:
-        tip_rack = load_tip_rack_state()
-    except Exception as e:
-        print(f"Failed to load tip rack state: {e}")
-        return
+#     # Connect to liquid handler
+#     mg = liquid_robot.MG400
+#     print("Re-homing liquid robot...")
+#     mg.move_home()  # ensure we start from a known position
     
-    # Mime movements for each instruction, getting fresh tips when substance changes
-    print("Simulated pipetting movements:")
-    current_substance = None
-    tip_index = None
-    tip_x = None
-    tip_y = None
+#     # Load tip rack and select an appropriate tip (matching real assembly behavior)
+#     try:
+#         tip_rack = load_tip_rack_state()
+#     except Exception as e:
+#         print(f"Failed to load tip rack state: {e}")
+#         return
     
-    for instr in instructions:
-        step = instr.get("step_index")
-        instr_substance = instr.get("source_solution")
-        sx = int(instr.get("source_x_ind", 0))
-        sy = int(instr.get("source_y_ind", 0))
-        vol = float(instr.get("volume_ul", 0.0) or 0.0)
+#     # Mime movements for each instruction, getting fresh tips when substance changes
+#     print("Simulated pipetting movements:")
+#     current_substance = None
+#     tip_index = None
+#     tip_x = None
+#     tip_y = None
+    
+#     for instr in instructions:
+#         step = instr.get("step_index")
+#         name_ing = instr.get("ingredient_name")
+#         sx = int(instr.get("source_x_ind", 0))
+#         sy = int(instr.get("source_y_ind", 0))
+#         src = instr.get("source_solution")
+#         vol = float(instr.get("volume_ul", 0.0) or 0.0)
         
-        # Check if substance changed; if so, drop current tip and get a new one
-        if instr_substance != current_substance:
-            # Drop the current tip if we have one and mark it as used
-            if tip_index is not None:
-                print(f"  Returning tip {tip_index} to tip rack (substance changed)")
-                try:
-                    mg.drop_tip(tip_x, tip_y)
-                except Exception as e:
-                    print(f"    Movement to return tip failed (simulated): {e}")
-                # Mark the tip as used for its substance
-                tip_rack.mark_tip_used(tip_index, current_substance)
+#         # Check if substance changed; if so, drop current tip and get a new one
+#         if src != current_substance: 
+#             # Drop the current tip if we have one and mark it as used
+#             if tip_index is not None:
+#                 print(f"  Returning tip {tip_index} to tip rack (substance changed)")
+#                 try:
+#                     mg.drop_tip(tip_x, tip_y)
+#                 except Exception as e:
+#                     print(f"    Movement to return tip failed (simulated): {e}")
+#                 # Mark the tip as used for its substance
+#                 tip_rack.mark_tip_used(tip_index, current_substance)
             
-            # Get a new tip for the new substance
-            current_substance = instr_substance
-            tip_index = _tip_index_for_substance_or_raise(tip_rack, current_substance)
-            
-            tip_x, tip_y = _tip_index_to_coordinates(tip_index)
-            print(f"  Acquiring tip {tip_index} at ({tip_x}, {tip_y}) for substance '{current_substance}'")
-            try:
-                mg.get_tip(tip_x, tip_y)
-            except Exception as e:
-                print(f"    Movement to tip failed (simulated): {e}")
+#             # Get a new tip for the new substance
+#             current_substance = src
+#             try:
+#                 tip_index = _tip_index_for_substance_or_error(tip_rack, current_substance)
+#                 tip_x, tip_y = _tip_index_to_coordinates(tip_index)
+#             except ValueError as e:
+#                 print(f"    Error occurred while acquiring tip: {e}")
+#                 return # Should have no tip attached, so ending here is safe
+
+#             print(f"  Acquiring tip {tip_index} at ({tip_x}, {tip_y}) for substance '{current_substance}'")
+#             try:
+#                 mg.get_tip(tip_x, tip_y)
+#             except Exception as e:
+#                 print(f"    Movement to tip failed (simulated): {e}")
+#                 print("     WARNING: remove tip before continuing to avoid collisions.")
+#                 return 
         
-        # Execute the instruction
-        print(f"  Step {step}: move to vial ({sx},{sy}) containing '{instr_substance}' (movement only)")
-        try:
-            # Move to vial up-position only so we do not descend into liquid
-            mg.get_liquid(sx, sy, vol, mime=True)
-        except Exception as e:
-            print(f"    Movement to vial failed (simulated): {e}")
-        print(f"           would aspirate {vol:.1f} uL (no action), then move to assembly post (no action)")
+#         # Execute the instruction
+#         print(f"  Step {step}: move to vial ({sx},{sy}) containing '{src}' (movement only)")
+#         try:
+#             # Move to vial up-position only so we do not descend into liquid
+#             mg.get_liquid(sx, sy, vol, mime=True)
+#         except Exception as e:
+#             print(f"    Movement to vial failed (simulated): {e}")
+#             print("     WARNING: remove tip before continuing to avoid collisions.")
+#             return
+#         print(f"           would aspirate {vol:.1f} uL (no action), then move to assembly post (no action)")
     
-    # Return the final tip to the tip rack and mark as used
-    if tip_index is not None:
-        print(f"  Returning final tip {tip_index} to tip rack")
-        try:
-            mg.drop_tip(tip_x, tip_y)
-            mg.move_home()
-        except Exception:
-            pass
-        # Mark the final tip as used to persist state across simulations
-        tip_rack.mark_tip_used(tip_index, current_substance)
+#     # Return the final tip to the tip rack and mark as used
+#     if tip_index is not None:
+#         print(f"  Returning final tip {tip_index} to tip rack")
+#         try:
+#             mg.drop_tip(tip_x, tip_y)
+#             mg.move_home()
+#         except Exception:
+#             print(f"     Something went wrong while returning tip ({tip_x}, {tip_y}) and re-homing the robot.")
+#             print( "     WARNING: remove tip before continuing to avoid collisions.")
+#             return
+#         # Mark the final tip as used to persist state across simulations
+#         tip_rack.mark_tip_used(tip_index, current_substance)
     
-    # Persist tip rack state so subsequent simulations use updated state
-    try:
-        save_tip_rack_state(tip_rack)
-        print(f"  Tip rack state persisted to disk")
-    except Exception as e:
-        print(f"  Warning: Failed to save tip rack state: {e}")
+#     # Persist tip rack state so subsequent simulations use updated state
+#     try:
+#         save_tip_rack_state(tip_rack)
+#         print(f"  Tip rack state persisted to disk")
+#     except Exception as e:
+#         print(f"  Warning: Failed to save tip rack state: {e}")
 
-    print(f"--- End movement-simulation for recipe: {name} ---\n")
-
+#     print(f"--- End movement-simulation for recipe: {name} ---\n")
 
 class BatterySessionTracker:
     LARGE_ADJUSTMENT_STATIC_THRESHOLD = 1.0
@@ -789,27 +807,40 @@ class AutoBatteryLab(Node):
             # Reload inventory to reflect any changes from prior batch items
             inventory = load_inventory_state()
             try:
-                feas = evaluate_formulation(inventory, recipe)
+                plan = evaluate_formulation(inventory, recipe)
             except Exception as e:
-                logger.error(f"Failed to evaluate recipe '{recipe_name}': {e}")
+                logger.error(f"Skipping recipe '{recipe_name}': failed to evaluate formulation ({e})")
                 continue
 
-            if not feas.get("feasible", False):
+            if not plan.get("feasible", False):
                 logger.error(
-                    f"Skipping recipe '{recipe_name}': formulation not feasible: {feas.get('issues', [])}"
+                    f"Skipping recipe '{recipe_name}': formulation not feasible: {plan.get('issues', [])}"
                 )
                 continue
 
             logger.info(f"Recipe '{recipe_name}' feasible — beginning assembly")
-            self.assemble_a_battery(
-                recipe=recipe,
-                recipe_index=recipe_index,
-                recipe_source_path=recipe_source_path,
-                batch_component_metadata=batch_component_metadata,
-            )
-            success_record[recipe_index - 1] = True
-            logger.info(f"Finished assembly for recipe '{recipe_name}'")
-        
+            try:
+                self.assemble_a_battery(
+                    recipe=recipe,
+                    recipe_index=recipe_index,
+                    recipe_source_path=recipe_source_path,
+                    batch_component_metadata=batch_component_metadata,
+                )
+            except Exception as e:
+                logger.error(f"Failed to assemble recipe '{recipe_name}': {e}")
+                # TODO: what's the best way to handle a failure mid-assembly? For now, get user input.
+                answer = input("To continue with next recipe, reset the system and type 'continue': ").strip().lower()
+                if answer != "continue":
+                    success_record[recipe_index - 1] = False
+                    logger.info("Aborting batch assembly.")
+                    break
+                else:
+                    logger.info("Continuing with next recipe in batch.")
+
+            else:
+                success_record[recipe_index - 1] = True
+                logger.info(f"Finished assembly for recipe '{recipe_name}'")
+
         logger.info("\n\n=========================\nAssembly completed. Success record:")
         for recipe_index, (recipe, success) in enumerate(zip(recipes, success_record), start=1):
             recipe_name = str(recipe.get("recipe_name", f"recipe_{recipe_index}"))
@@ -860,12 +891,209 @@ class AutoBatteryLab(Node):
         if premove_callback is not None:
             self.crimper_robot.release_separator()  # open gripper and move back home
 
+    def dispense_electrolyte_recipe(self, recipe: dict, mime:bool=False, demo:bool=False):
+        """Used to follow the steps prescribed by the recipe to mix an electrolyte. 
+        When the 'mime' flag (default: False) is set to true, the liquid handler will
+        retrieve each pipette tip and 'gesture' at the vial it would use, but will not
+        contact the liquids or aspirate any fluids. This function can be used to investigate
+        the system's correct loading/understanding of a recipe before completing it.
+        
+        Similarly, the `demo` flag (default: False) can be used to demonstrate the system
+        using a default 'recipe' of 0 uL from the vial at (0, 0). """
+
+        name = recipe.get("name", "<unnamed>") if not demo else "DEMO"
+        logger = self.get_logger()
+        extra = "SIMULATING:  " if mime else ""
+        logger.info(f"----- {extra}Dispensing electrolyte recipe {name}-----")
+
+        inventory = load_inventory_state()
+        if not demo:
+            try: 
+                plan = evaluate_formulation(inventory, recipe)
+            except Exception as e:
+                logger.error(f"Error evaluating formulation for recipe {name}: {e}")
+                return "failed_formulation"
+            if not plan.get("feasible", False):
+                issues = plan.get("issues", [])
+                logger.error(f"Recipe '{name}' is NOT feasible. Issues: {issues}")
+                return "failed_feasibility"
+        
+            instructions = plan.get("instructions", [])
+            if not instructions:
+                logger.error(f"Recipe '{name}' returned no instructions to execute.")
+                return "failed_instructions"
+        else:
+            # In demo mode, we'll use a default recipe
+            logger.info("Running in demo mode with default 'recipe'.")
+            try:
+                demo_solution = inventory.solution_at(0, 0)
+            except:
+                # No solution loaded at (0, 0) yet, so create a dummy
+                demo_solution = {
+                    'name': 'DEMO_SOLUTION(none)',
+                    'volume': 1500,
+                    'v': {'DEMO': 1.0},
+                    's': {}, 
+                    'a': {},
+                    'local_smiles': {'DEMO': 'DEMO'},
+                    'use_pubchem': False
+                }
+                inventory = set_vial_contents(
+                    inventory, 
+                    x_ind=0,
+                    y_ind=0,
+                    electrolyte=demo_solution,
+                    volume_ul=1500.0
+                )
+                save_inventory_state(inventory)
+                logger.info("Default demo solution initialized and saved.")
+
+            instructions = [
+                {
+                    "step_index": 0,
+                    "source_x_ind": 0,
+                    "source_y_ind": 0,
+                    "source_solution": demo_solution['name'],
+                    "volume_ul": 0.0
+                }
+            ]
+
+        mg = self.liquid_robot.MG400
+        logger.info("Re-homing liquid robot before following recipe instructions.")
+        mg.move_home()
+
+        try:
+            tip_rack = load_tip_rack_state()
+        except Exception as e:
+            logger.error(f"Error loading tip rack state: {e}")
+            return "failed_to_load_tip_rack"
+    
+        current_substance = None
+        tip_index = None
+        tip_x = None
+        tip_y = None
+
+        for instr in instructions:
+            step = instr.get("step_index")
+            sx = int(instr.get("source_x_ind", 0))
+            sy = int(instr.get("source_y_ind", 0))
+            src = instr.get("source_solution")
+            vol = float(instr.get("volume_ul", 0.0) or 0.0)
+            if vol == 0 and not demo:
+                logger.warning(f"Instruction with zero volume detected: {instr}")
+            elif vol < 0:
+                logger.error(f"Instruction with negative volume detected: {instr}")
+                return "negative_volume_requested"
+
+            logger.info(f"Executing instruction {step}: {vol} ul of {src} from ({sx}, {sy}) ")
+            if src != current_substance:
+                # Drop the current tip if we have one and mark it as used
+                if tip_index is not None:
+                    logger.info(f"Returning tip {tip_index} to tip rack (substance changed)")
+                    try:
+                        mg.drop_tip(tip_x, tip_y)
+                    except Exception as e:
+                        logger.error(f"Movement to return tip failed: {e}")
+                        return "failed_to_return_tip"
+                    # Mark the tip as used for its substance
+                    tip_rack.mark_tip_used(tip_index, current_substance)
+
+                # Get a new tip for the new substance
+                current_substance = src
+                try:
+                    tip_index = _tip_index_for_substance_or_error(tip_rack, current_substance)
+                    tip_x, tip_y = _tip_index_to_coordinates(tip_index)
+                except Exception as e:
+                    logger.error(f"Failed to get a new tip for substance {current_substance}: {e}")
+                    return "failed_to_acquire_tip"
+
+                logger.info(f"Using new tip {tip_index} for substance {current_substance}")
+                try:
+                    mg.get_tip(tip_x, tip_y)
+                except Exception as e:
+                    logger.error(f"Failed to get tip {tip_index} for substance {current_substance}: {e}")
+                    logger.warning("WARNING: remove tip before continuing to avoid collisions.")
+                    return "failed_to_get_tip"
+            
+            # Execute the instruction
+            try:
+                mg.get_liquid(sx, sy, vol, mime=mime or demo)
+            except Exception as e:
+                logger.error(f" Movement to vial ({sx}, {sy}) failed: {e}")
+                return "failed_to_get_liquid"
+            
+            if not mime:
+                # aspirate the liquid, then move to the post, then return the tip
+                try:
+                    mg.add_liquid_to_post(vol)
+                except Exception as e:
+                    logger.error(f"Failed to add liquid to post: {e}")
+                    return "failed_to_add_liquid_to_post"
+                try:
+                    mg.return_liquid(sx, sy)
+                except Exception as e:
+                    logger.error(f"Failed to return liquid to vial ({sx}, {sy}): {e}")
+                    return "failed_to_return_liquid"
+                
+                # Consume liquid from inventory only after successful aspiration and dispensing
+                try:
+                    inventory.consume_solution_from_vial(sx, sy, vol)
+                    try:
+                        save_inventory_state(inventory)
+                    except Exception as e:
+                        logger.error(f"Failed to save inventory state: {e}")
+                except Exception as e:
+                    logger.error(f"Failed to consume solution from vial ({sx}, {sy}): {e}")
+                
+                # Build vial alerts and update inventory state if necessary
+                try:
+                    alerts = inventory.build_vial_alerts()
+                    # log alerts if any
+                    if alerts:
+                        for ind, alert in enumerate(alerts):
+                            logger.warning(f"Vial alert {ind+1}: {alert}")
+                    else:
+                        logger.info("No vial alerts found for this step. Continuing...")
+                except Exception as e:
+                    logger.error("Failed to build vial alerts")
+
+                # Save updated inventory state
+                try:
+                    save_inventory_state(inventory)
+                except Exception as e:
+                    logger.warning(f"Failed to save updated inventory: {e}")
+
+        # Return the final tip to the tip rack and mark as used
+        if tip_index is not None:
+            logger.info(f"Returning final tip {tip_index} to tip rack")
+            try:
+                mg.drop_tip(tip_x, tip_y)
+                mg.move_home()
+            except Exception as e:
+                logger.error(f"Something went wrong while returning tip ({tip_x}, {tip_y}) and re-homing the robot.")
+                logger.warning("WARNING: remove tip before continuing to avoid collisions")
+                return
+            # Mark the final tip as used to persist state across simulations
+            tip_rack.mark_tip_used(tip_index, current_substance)
+
+        # Persist tip rack state 
+        try:
+            save_tip_rack_state(tip_rack)
+            logger.info("Tip rack state saved to disk")
+        except Exception as e:
+            logger.warning(f"Failed to save tip rack state: {e}")
+        
+        logger.info(f"----- Finished recipe {name} -----\n")
+
+
+
     def assemble_a_battery(
         self,
         recipe: Optional[dict] = None,
         recipe_index: Optional[int] = None,
         recipe_source_path: Optional[str] = None,
         batch_component_metadata: Optional[dict] = None,
+        demo:Optional[bool] = False,
     ):
         battery_record = self.session_tracker.start_battery(
             recipe=recipe,
@@ -921,99 +1149,152 @@ class AutoBatteryLab(Node):
             self.liquid_robot.MG400.move_home()
             try:
                 # Load tip rack and select an appropriate tip
-                tip_rack = load_tip_rack_state()
-                
-                if recipe is None or not recipe.get("target_electrolyte"):
-                    print("No solvency electrolyte recipe provided. Using default demo behavior.")
-                    # This should only happen during a demo (no recipe)
-                    volume_to_get = self._electrolyte_volume_for_recipe(recipe)
-                    # default to the first vial for a demo
-                    liquid_x, liquid_y = 0, 0
-                    try: 
-                        substance_name = inventory.solution_at(liquid_x, liquid_y)
-                    except Exception:
-                        substance_name = None
-                    tip_index = _tip_index_for_substance_or_raise(tip_rack, substance_name)
-                    tip_x, tip_y = _tip_index_to_coordinates(tip_index)
+                try:
+                    tip_rack = load_tip_rack_state()
+                except Exception as e:
+                    self.get_logger().error(f"Error loading tip rack: {e}")
+                    self.session_tracker.finish_battery(battery_record, status="failed_tip_rack")
+                    return
+
+                # if recipe is None or not recipe.get("target_electrolyte"):
+                #     print("No solvency electrolyte recipe provided. Using default demo behavior.")
+                #     # This should only happen during a demo (no recipe)
+                #     volume_to_get = self._electrolyte_volume_for_recipe(recipe)
+                #     # default to the first vial for a demo
+                #     liquid_x, liquid_y = 0, 0
+                #     try: 
+                #         substance_name = inventory.solution_at(liquid_x, liquid_y)
+                #     except Exception:
+                #         substance_name = None
+                #     tip_index = _tip_index_for_substance_or_error(tip_rack, substance_name)
+                #     tip_x, tip_y = _tip_index_to_coordinates(tip_index)
                     
-                    self.liquid_robot.MG400.get_tip(tip_x, tip_y)
-                    self.liquid_robot.MG400.get_liquid(liquid_x, liquid_y, volume_to_get)
-                    self.liquid_robot.MG400.add_liquid_to_post(volume_to_get)
-                    self.liquid_robot.MG400.return_liquid(liquid_x, liquid_y)
-                    self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
-                    self.liquid_robot.MG400.move_home()
+                #     self.liquid_robot.MG400.get_tip(tip_x, tip_y)
+                #     self.liquid_robot.MG400.get_liquid(liquid_x, liquid_y, volume_to_get)
+                #     self.liquid_robot.MG400.add_liquid_to_post(volume_to_get)
+                #     self.liquid_robot.MG400.return_liquid(liquid_x, liquid_y)
+                #     self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
+                #     self.liquid_robot.MG400.move_home()
                     
-                    # Mark tip as used for unknown substance
-                    tip_rack.mark_tip_used(tip_index, substance_name)
-                    save_tip_rack_state(tip_rack)
+                #     # Mark tip as used for unknown substance
+                #     tip_rack.mark_tip_used(tip_index, substance_name)
+                #     save_tip_rack_state(tip_rack)
+                if demo:
+                    self.dispense_electrolyte_recipe(recipe={}, demo=True)
                 else:
-                    # Use electrolyte planner to allocate from vials and update inventory
-                    inventory = load_inventory_state()
-                    plan_payload = evaluate_formulation_with_vials(inventory, recipe)
-                    if not plan_payload.get("feasible", False):
-                        issues = plan_payload.get("issues", [])
-                        self.get_logger().error(
-                            f"Formulation not feasible for recipe '{recipe.get('recipe_name')}', issues: {issues}"
-                        )
-                        self.session_tracker.finish_battery(battery_record, status="failed_feasibility")
-                        return
+                    self.dispense_electrolyte_recipe(recipe)
+                    # # Use electrolyte planner to allocate from vials and update inventory
+                    # inventory = load_inventory_state()
 
-                    instructions = plan_payload.get("instructions", [])
-                    
-                    # Execute instructions, getting a fresh tip each time the substance changes
-                    current_substance = None
-                    tip_index = None
-                    tip_x = None
-                    tip_y = None
-                    
-                    for instr in instructions:
-                        instr_substance = instr.get("source_solution")
-                        
-                        # Check if substance changed; if so, drop current tip and get a new one
-                        if instr_substance != current_substance:
-                            # Drop the current tip if we have one
-                            if tip_index is not None:
-                                self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
-                                tip_rack.mark_tip_used(tip_index, current_substance)
-                            
-                            # Get a new tip for the new substance
-                            current_substance = instr_substance
-                            tip_index = _tip_index_for_substance_or_raise(tip_rack, current_substance)
-                            
-                            tip_x, tip_y = _tip_index_to_coordinates(tip_index)
-                            self.liquid_robot.MG400.get_tip(tip_x, tip_y)
-                        
-                        # Execute the instruction
-                        sx = int(instr.get("source_x_ind", 0))
-                        sy = int(instr.get("source_y_ind", 0))
-                        vol = float(instr.get("volume_ul", 0.0))
-                        if vol <= 0:
-                            continue
-                        # Aspirate from source vial and dispense to assembly post
-                        self.liquid_robot.MG400.get_liquid(sx, sy, vol)
-                        self.liquid_robot.MG400.add_liquid_to_post(vol)
-                        # Blowout/return to source to clear the tip
-                        self.liquid_robot.MG400.return_liquid(sx, sy)
-                    
-                    # Drop the final tip and mark as used
-                    if tip_index is not None:
-                        self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
-                        tip_rack.mark_tip_used(tip_index, current_substance)
-                    
-                    self.liquid_robot.MG400.move_home()
-                    save_tip_rack_state(tip_rack)
+                    # try:
+                    #     plan = evaluate_formulation(inventory, recipe)
+                    # except Exception as e:
+                    #     self.get_logger().error(f"Error evaluating formulation: {e}")
+                    #     self.session_tracker.finish_battery(battery_record, status="failed_evaluation")
+                    #     return
 
-                    # Persist updated inventory returned by the planner
-                    updated_inv = plan_payload.get("updated_inventory")
-                    if updated_inv is not None:
-                        try:
-                            save_inventory_state(Inventory(**updated_inv))
-                        except Exception:
-                            # As a fallback, try saving the in-memory Inventory object
-                            try:
-                                save_inventory_state(inventory)
-                            except Exception as e:
-                                self.get_logger().warning(f"Failed to save updated inventory: {e}")
+                    # if not plan.get("feasible", False):
+                    #     issues = plan.get("issues", [])
+                    #     self.get_logger().error(
+                    #         f"Formulation not feasible for recipe '{recipe.get('recipe_name')}', issues: {issues}"
+                    #     )
+                    #     self.session_tracker.finish_battery(battery_record, status="failed_feasibility")
+                    #     return
+
+                    # instructions = plan.get("instructions", [])
+                    # if not instructions:
+                    #     self.get_logger().error(f"No instructions generated for recipe '{recipe.get('recipe_name')}'")
+                    #     self.session_tracker.finish_battery(battery_record, status="failed_instructions")
+                    #     return
+
+                    # # Re-home liquid robot before starting
+                    # self.liquid_robot.MG400.move_home()
+                    
+                    # # Execute instructions, getting a fresh tip each time the substance changes
+                    # current_substance = None
+                    # tip_index = None
+                    # tip_x = None
+                    # tip_y = None
+
+                    # for instr in instructions:
+                    #     sx = int(instr.get("source_x_ind", 0))
+                    #     sy = int(instr.get("source_y_ind", 0))
+                    #     src = instr.get("source_solution")
+                    #     vol = float(instr.get("volume_ul", 0.0))
+                    #     if vol == 0:
+                    #         continue
+                    #     elif vol < 0:
+                    #         self.get_logger().warning(f"Invalid volume for substance {current_substance} at vial ({sx}, {sy}): {vol}")
+                    #         continue
+                        
+                    #     # Check if substance changed; if so, drop current tip and get a new one
+                    #     if src != current_substance:
+                    #         # Drop the current tip if we have one
+                    #         if tip_index is not None:
+                    #             try:
+                    #                 self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
+                    #             except Exception as e:
+                    #                 self.get_logger().error(f"Error dropping tip: {e}")
+                    #             tip_rack.mark_tip_used(tip_index, current_substance)
+
+                    #         # Get a new tip for the new substance
+                    #         current_substance = src
+                    #         try:
+                    #             tip_index = _tip_index_for_substance_or_error(tip_rack, current_substance)
+                    #             tip_x, tip_y = _tip_index_to_coordinates(tip_index)
+                    #         except Exception as e:
+                    #             self.get_logger().error(f"Error getting tip for substance {current_substance}: {e}")
+                    #             continue
+
+                    #         try:
+                    #             self.liquid_robot.MG400.get_tip(tip_x, tip_y)
+                    #         except Exception as e:
+                    #             self.get_logger().error(f"Error getting tip: {e}")
+                    #             continue
+
+                    #     # Aspirate from source vial and dispense to assembly post
+                    #     self.liquid_robot.MG400.get_liquid(sx, sy, vol)
+                    #     self.liquid_robot.MG400.add_liquid_to_post(vol)
+                    #     # Blowout/return to source to clear the tip
+                    #     self.liquid_robot.MG400.return_liquid(sx, sy)
+
+                    #     # Consume liquid from inventory in-memory only after successful aspiration
+                    #     try:
+                    #         inventory.consume_solution_from_vial(sx, sy, vol)
+                    #         try:
+                    #             save_inventory_state(inventory)
+                    #         except Exception as e:
+                    #             self.get_logger().warning(f"Failed to save updated inventory: {e}")
+                    #     except Exception as e:
+                    #         self.get_logger().warning(f"Failed to consume solution from digital vial: {e}")
+                        
+                    #     # Build vial alerts and update inventory state in-memory after each instruction to reflect changes for subsequent instructions in the same recipe
+                    #     try:
+                    #         alerts = inventory.update_vial_alerts()
+                    #         # log alerts if any
+                    #         if alerts:
+                    #             for ind, alert in enumerate(alerts):
+                    #                 self.get_logger().warning(f"Vial alert {ind+1}: {alert}")
+                    #         else: 
+                    #             self.get_logger().info("No vial alerts found for this step. Continuing...")
+                    #     except Exception as e:
+                    #         self.get_logger().warning(f"Failed to update vial alerts: {e}")
+                        
+                    #     # Save the updated inventory state
+                    #     try:
+                    #         save_inventory_state(inventory)
+                    #     except Exception as e:
+                    #         self.get_logger().warning(f"Failed to save updated inventory: {e}")
+
+                    # # Drop the final tip and mark as used
+                    # if tip_index is not None:
+                    #     self.liquid_robot.MG400.drop_tip(tip_x, tip_y)
+                    #     tip_rack.mark_tip_used(tip_index, current_substance)
+                    
+                    # self.liquid_robot.MG400.move_home()
+                    # save_tip_rack_state(tip_rack)
+
+                    
             except Exception:
                 self.session_tracker.finish_battery(battery_record, status="failed")
                 raise
@@ -1476,6 +1757,7 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
                 "TIP DEFICIT: the current tip rack does not have enough clean tips to finish this batch without contamination."
             )
         # Offer test/dry-run and movement-simulation options
+        logger.info("ATTENTION: before assembling a battery, confirm there is no pipette tip attached to the MG400, the lookup camera lights are powered on, and the required materials are loaded.")
         action = input(
             "Choose action: [T]est recipes (simulate text), [M]ovements (simulate MG400 movements), [A]ssemble now, [C]ancel (default C): "
         ).strip().lower()
@@ -1508,7 +1790,8 @@ def _recipes_batch_menu(batterylab: AutoBatteryLab):
                 try:
                     recipe_idx = int(selection) - 1
                     if 0 <= recipe_idx < len(recipes):
-                        _simulate_recipe_execution_with_movements(recipes[recipe_idx], inventory, batterylab.liquid_robot)
+                        batterylab.dispense_electrolyte_recipe(recipes[recipe_idx])
+                        #_simulate_recipe_execution_with_movements(recipes[recipe_idx], inventory, batterylab.liquid_robot)
                     else:
                         print(f"Invalid selection. Please enter a number between 1 and {len(recipes)}.")
                 except ValueError:

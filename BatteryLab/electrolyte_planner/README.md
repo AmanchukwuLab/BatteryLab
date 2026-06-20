@@ -7,12 +7,40 @@ This subpackage provides a minimal, standalone interface for:
 - accessing solvency's interface for checking whether a requested formulation is possible from current inventory,
 - generating machine-readable pipetting instructions.
 
-It also supports persistence of vial inventory to JSON so state can survive
-application restarts.
+It also supports persistence of vial inventory to JSON so state can survive application restarts.
 
 Recipes now use solvency-style electrolyte objects directly, with fields for `name`, `volume`, `v`olume fractions, `s`alt molarities, and `a`dditive molarities (see below).
 
+## Internal models
+
+This package models the physical components involved in the electrolyte mixing process in order to track and anticipate issues. Each model has its own set of attributes:
+
+- the electrolytes themselves
+    - chemical composition
+    - chemical identifiers (SMILES)
+    
+- individual vials
+    - location (x, y) on the storage rack
+    - current electrolyte contents
+    - previous electrolyte contents
+    - current volume available (ul)
+    - max capacity (ul)
+    - a minimum volume threshold (ul)
+
+- electrolyte inventory
+    - list of vial objects
+
+- pipette tip contents
+    - index on the rack (1-94)
+    - current substance name
+    - timestamp of last use
+
+- pipette tip rack
+    - list of pipette tip objects
+
 ## Solvency feasibility example
+
+The following provides a minimal example of the package's evaluation capabilities. In practice, Batter
 
 ```python
 from BatteryLab.electrolyte_planner import evaluate_formulation
@@ -35,30 +63,14 @@ request = {
 plan = evaluate_formulation(inventory, request)
 ```
 
-TODO: continue editing here
-
-`evaluate_formulation(...)` returns a plain dictionary with:
-
-- `feasible`: whether the formulation can be made,
-- `instructions`: a list of transfer steps,
-- `issues`: why the request could not be satisfied, if applicable.
-
 ## Vial tracking and low-volume flags
 
-Vials are modeled with a 1500 uL maximum. The helper
-`evaluate_formulation_with_vials(...)` will:
-
-- evaluate feasibility,
-- consume required volume from matching vials,
-- return `low_volume_flag` and detailed `vial_alerts`,
-- return `vial_usage` records for per-operation reporting,
-- preserve `previous_solution_name` even when a vial reaches zero (for
-  cleaning/reuse evaluation).
-
-By default, a vial is considered:
+Vials are modeled with a 1500 uL maximum. By default, a vial is considered:
 
 - low when remaining volume is `<= 120 uL`,
 - empty/unusable when remaining volume is `<= 30 uL`.
+
+
 
 ## Persistence
 Use the storage helpers to keep state across restarts:
@@ -75,8 +87,7 @@ result = evaluate_formulation_with_vials(inventory, request)
 save_inventory_state(inventory)
 ```
 
-If you call `evaluate_formulation_with_vials(...)` with plain dictionaries,
-persist `result["updated_inventory"]` instead of the original input dictionary.
+If you call `evaluate_formulation_with_vials(...)` with plain dictionaries, persist `result["updated_inventory"]` instead of the original input dictionary.
 
 ## Manual vial assignment
 

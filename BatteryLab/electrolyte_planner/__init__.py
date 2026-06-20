@@ -19,8 +19,6 @@ from .models import (
 )
 from .planner import (
     evaluate_formulation,
-    evaluate_formulation_with_vials,
-    plan_and_update_vials,
     plan_formulation,
 )
 from .operations import clear_vial, set_vial_contents
@@ -58,7 +56,6 @@ __all__ = [
     "TipRack",
     "TipContents",
     "evaluate_formulation",
-    "evaluate_formulation_with_vials",
     "format_operation_update",
     "format_vial_statuses",
     "load_inventory_state",
@@ -66,7 +63,6 @@ __all__ = [
     "show_save_location",
     "load_tip_rack_state",
     "save_tip_rack_state",
-    "plan_and_update_vials",
     "plan_formulation",
     "print_operation_update",
     "print_vial_statuses",

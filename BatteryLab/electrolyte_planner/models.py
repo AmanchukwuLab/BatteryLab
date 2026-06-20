@@ -296,3 +296,30 @@ class Inventory(BaseModel):
             if vial.x_ind == x_ind and vial.y_ind == y_ind:
                 return vial.volume_ul
         raise KeyError(f"No vial found at coordinates: x_ind={x_ind}, y_ind={y_ind}")
+    
+    def consume_solution_from_vial(self, x_ind: int, y_ind: int, volume: float) -> None:
+        for vial in self.vials:
+            if vial.x_ind == x_ind and vial.y_ind == y_ind:
+                if vial.volume_ul < volume:
+                    raise ValueError(f"Not enough volume in vial at ({x_ind}, {y_ind}) to consume {volume} uL")
+                vial.volume_ul -= volume
+                return
+        raise KeyError(f"No vial found at coordinates: x_ind={x_ind}, y_ind={y_ind}")
+
+
+    def update_vial_alerts(self) -> List[VialAlert]:
+        alerts = []
+        for vial in self.vials:
+            low_volume_flag = vial.volume_ul <= vial.low_volume_threshold_ul
+            empty_or_unusable_flag = vial.volume_ul <= DEFAULT_EMPTY_VOLUME_THRESHOLD_UL
+            alert = VialAlert(
+                x_ind=vial.x_ind,
+                y_ind=vial.y_ind,
+                current_electrolyte=vial.current_electrolyte,
+                previous_electrolyte=vial.previous_electrolyte,
+                remaining_volume_ul=vial.volume_ul,
+                low_volume_flag=low_volume_flag,
+                empty_or_unusable_flag=empty_or_unusable_flag,
+            )
+            alerts.append(alert)
+        return alerts
