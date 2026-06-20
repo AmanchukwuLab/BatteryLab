@@ -1072,7 +1072,7 @@ class AutoBatteryLab(Node):
             except Exception as e:
                 logger.error(f"Something went wrong while returning tip ({tip_x}, {tip_y}) and re-homing the robot.")
                 logger.warning("WARNING: remove tip before continuing to avoid collisions")
-                returnc
+                return "failed_to_return_final_tip"
             # Mark the final tip as used to persist state across simulations
             tip_rack.mark_tip_used(tip_index, current_substance)
 
