@@ -1290,8 +1290,8 @@ Electrolyte Planner Menu
             print("Saved inventory to disk.")
             continue
         if user_input == "p":
-            show_save_location(inventory)
-            print("Inventory file location displayed.")
+            location = show_save_location(inventory)
+            print(f"Inventory file location: {location}")
             continue
         print("The choice is not valid. Please try again.")
 
