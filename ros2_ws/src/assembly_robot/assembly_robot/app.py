@@ -1753,7 +1753,7 @@ def main():
         print("MG400 disconnected safely.")
         batterylab.destroy_node()
         rclpy.shutdown()
-
+   
 
 if __name__ == "__main__":
     main()
