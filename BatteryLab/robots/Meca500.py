@@ -55,7 +55,6 @@ class Meca500():
             self.logger.info(f"{self.robot_name} is homed and ready!")
             if tools.robot_model_is_meca500(self.robot.GetRobotInfo().robot_model):
                 self.logger.info("The robot is confirmed to be Meca500!")
-                # TODO: Set Gripper Force, Joint Velocity and other parameters
                 self.robot.SetGripperForce(self.RobotConstants.GRIP_F)
                 self.robot.SetGripperVel(self.RobotConstants.GRIP_VEL)
                 self.robot.SetCartLinVel(self.RobotConstants.L_VEL)

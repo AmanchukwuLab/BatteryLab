@@ -18,7 +18,7 @@ setup(
     zip_safe=True,
     maintainer='yuanjian',
     maintainer_email='yuanjian@uchicago.edu',
-    description='TODO: Package description',
+    description="Package for controlling one of the robot arms used in the BatteryLab system of the Amanchukwu Lab at the University of Chicago. Current maintainers can be found on the lab's GitHub page.",
     license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={

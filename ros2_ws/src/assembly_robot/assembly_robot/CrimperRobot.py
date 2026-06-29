@@ -295,7 +295,7 @@ class CrimperRobot(Node):
                 self.logger.error("The battery is not picked up properly")
                 return
         self.crimper_robot.drop_to_crimper()
-        # TODO: Call the crimper to do the crimping work
+        # TODO: Call the crimper to do the crimping work (need a crimper first...)
         self.crimper_robot.pick_up_from_crimper()
         if use_camera_check:
             ok = self.check_battery_is_picked()

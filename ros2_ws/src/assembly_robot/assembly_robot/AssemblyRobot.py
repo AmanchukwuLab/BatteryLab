@@ -560,7 +560,6 @@ class AssemblyRobot(Node):
         self.rail_meca500.robot.Delay(0.2)
 
         # Take and return picture
-        # TODO: use get_image for storing the image or analysis
         for i in range(2):
             self.look_up_camera_client.send_request()
             rclpy.spin_until_future_complete(
@@ -586,7 +585,6 @@ class AssemblyRobot(Node):
         self.rail_meca500.robot.Delay(0.2)
         self.move_zaber_rail(rail_pos)
         print(f"To take a photo, moving to Robot Pos {robot_pos}")
-        # TODO: use get_image for storing the image or analysis
         self.arm_camera_client.send_request()
         rclpy.spin_until_future_complete(
             self.arm_camera_client, self.arm_camera_client.future

@@ -1,3 +1,5 @@
+NOTE: as of June 24 2026, this README needs to be revised and updated to reflect revisions in the code.
+
 # Electrolyte Planner
 
 This subpackage provides a minimal, standalone interface for:

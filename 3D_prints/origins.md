@@ -1,10 +1,9 @@
-Most of the components used in this project were sourced from the parts designed by Bojing Zhang, a PhD candidate at TUM (as of June 2026) in Dr. Helge Stein's group, for [version 1.0 of their AutoBASS system](https://github.com/Helge-Stein-Group/AutoBASS/tree/AutoBASS_2.0/Mechanical%20Parts/AutoBASS_1.0). The original designs are located online at the link above. Those files have been redunantly included in this directory as "AutoBASS_1.0" to ensure they aren't lost.
+Most of the components used in this project were sourced from the parts designed by Bojing Zhang, a PhD candidate at TUM (as of June 2026) in Dr. Helge Stein's group, for [version 1.0 of their AutoBASS system](https://github.com/Helge-Stein-Group/AutoBASS/tree/AutoBASS_2.0/Mechanical%20Parts/AutoBASS_1.0). The original designs are located online at the link above. 
 
-Some of the parts have been modified for various reasons. Below is a list of parts that were modified alongside an overview of the changes and their purpose.
+Some of the parts were modified for various reasons. Below is a list of parts that were modified alongside an overview of the changes and their purpose.
 
 | Part name | Modifications made |
 | --------- | ------------------ |
-|  |  |
-|  |  |
-
-==TODO: finish==
+| Assembly Grippers| The separator generated a lot of static when being picked up by the suction cup. It would stick after it was released, often flying off the pedestal. To prevent this, the crimper robot arm was used to grab the separator and hold it in place when the suction cup was disengaged at the pedestal. Small 'fins' were added along the top on the actuating end to ensure the separator didn't lift with the suction cup. |
+| Arm camera holder | The previous version of this part (also included) situated the camera closer to the trays. When grabbing the top-rightmost cathode case, the camera barely collided with the rail. The adjusted part holds the camera at the top of the mounting rail rather than the bottom. |
+| New Camera Mount | The original camera mount (pictures in the main README as of June 2026) was fitted for a larger, circular webcam. This camera did not have a manually adjustable focus, preventing reproducible lookup photos. This new bracket was designed to fit onto the old mounting pegs and to provide a space underneath the camera for a soldered protoboard "flash" (the new camera did not have one built in) |

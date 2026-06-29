@@ -72,7 +72,7 @@ def get_tip_coords():
                 print("Invalid input. Please enter non-negative values.")
                 continue
             else:
-                if x >= 8: # TODO: check these!
+                if x >= 8:
                     print("Invalid input. Tip index x must be less than 8.")
                     continue
                 if y >= 12:

@@ -106,7 +106,7 @@ def _allocate_from_vials(
 #             )
 
 #         if vial.volume_ul <= 0:
-#             # TODO: consider adding a warning if volume is negative. This would indicate a bug in the planner
+#             # Consider adding a warning if volume is negative. This would indicate a bug in the planner
 #             vial.volume_ul = 0.0
 #             # Preserve history to support cleaning/reuse decisions.
 #             vial.previous_electrolyte = vial.current_electrolyte

@@ -23,7 +23,7 @@ The following hardware has been employed. While identical items are not necessar
 - 1 DIY Raspberry Pi-compatible [suction cup system](https://www.aliexpress.us/item/3256802124499190.html?spm=a2g0o.order_list.order_list_main.5.77f21802SE7IHi&gatewayAdapt=glo2usa)
 - 2 Raspberry Pi 5s and 1 Raspberry Pi 4
 - 1 [TOB-DF-160](https://www.tobmachine.com/coin-cell-crimping-machine_c134?gad_source=1&gclid=Cj0KCQjwrKu2BhDkARIsAD7GBov9F47aTY1ZMRAuWiKtbsL2JQtdZlmeonXlnT11z4B-JgYZ6LxH1a0aAs9AEALw_wcB) Battery Crimper
-- Several 3D printable parts (files included) ==TODO: confirm==
+- Several 3D printable parts (files included or linked)
 
 ### The Assembly Robot
 
@@ -60,7 +60,7 @@ We use a second Meca500 to move the assembled battery from the assembly pedestal
 
 ## Software Requirements
 
-If you have not worked with GitHub or a Unix-type shell before, see the ==guide posted in the ```docs``` folder. TODO, LINK==
+If you have not worked with GitHub or a Unix-type shell before, see the [guide posted in the ```docs``` folder](docs\Shell_and_GitHub_tutorial.md).
 
 The codebase can be separated into two main parts:
 
@@ -96,9 +96,9 @@ colcon build
 Since we use the `cv_bridge` package to transfer image data among ROS2 nodes, you may encounter a numpy compatibility issue as discussed in [known issues](./docs/known_issues/cv_bridge_incompatible_with_Numpy2.0.md).
 
 ## Launching the system
-You can ssh into each Raspberry Pi to launch each ROS2 node or use the launch file we prepared for you.
+<!--You can ssh into each Raspberry Pi to launch each ROS2 node or use the launch file we prepared for you.
 
-> NOTE: The launch file and the ROS2 packages have not been fully developed.
+> NOTE: The launch file and the ROS2 packages have not been fully developed-->
 
 Start all the necessary ROS2 services by running the following commands on the specified Raspberry Pis. As a reminder, the systems can only talk with each other if they are connected through the same network. If you can't ```ssh``` between them, ROS2 likely can't pass information either.
 
@@ -113,18 +113,7 @@ ros2 launch battery_lab_bringup board_rasp.launch.py
 ros2 launch battery_lab_bringup out_rasp.launch.py
 ```
 
-At this point, any of the individual robots can be controlled from any of the three Raspberry Pis:
-```bash
-# to control the assembly robot
-ros2 run assembly_robot assembly_robot
-
-# to control the liquid handling robot
-ros2 run assembly_robot liquid_robot
-
-# to control the crimper robot
-ros2 run assembly_robot crimper_robot
-```
-Alternatively, the following general command-line app runs the whole assembly process with just one command and acts as a wrapper for the individual robot command menus listed above:
+At this point, the following general command-line app manages the whole system with just one command and acts as a wrapper for individual robot command menus and the battery building process as a whole:
 
 ```bash
 ros2 run assembly_robot app
@@ -161,10 +150,14 @@ Each assembled battery's record includes the recipe name and payload (stored as 
 We may eventually develop a web-based UI for easier control with a graphical interface.
 
 ## Further Documentation
-Further documentation (including troubleshooting, known issues, and how-to's) can be found in the `docs` subfolder.
+Further documentation (including troubleshooting, known issues, and how-to's) can be found in the [`docs`](docs/) subfolder. This includes an [ongoing work](docs/OngoingWork.md) file documenting proposed additions to the system.
 
 ## Acknowledgements
 This system was based on the initial version of the ["AutoBASS" system](https://github.com/Helge-Stein-Group/AutoBASS) developed by Dr. Helge Stein's group at the Technical University of Munich. Some initial published works featuring the system include [Digital Discovery, 2024,3, 1342-1349](https://doi.org/10.1039/D4DD00002A) and [Digital Discovery, 2022,1, 755-762](https://doi.org/10.1039/D2DD00046F).
 
-The construction of the [Amanchukwu Lab](https://amanchukwu.uchicago.edu/)'s version of that system was initially led by [Yuanjian Liu](https://github.com/legendperceptor/), including hardware development and initial codebase modifications. Later work by [Jared Porter](https://github.com/jwp91) focused on machine vision correction, electrolyte recipe management, as well as UI and hardware interface improvements.
+The construction of the [Amanchukwu Lab](https://amanchukwu.uchicago.edu/)'s version of that system was initially led by [Yuanjian Liu](https://github.com/legendperceptor/), including hardware development and initial codebase modifications. Later work by [Jared Porter](https://github.com/jwp91) focused on refining machine vision correction, electrolyte recipe management, as well as UI and hardware interface improvements.
 
+<!--
+Originally authored by Yuanjian Liu (~2024?)
+Revised by Jared Porter (June 2026)
+-->

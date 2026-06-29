@@ -3,7 +3,7 @@
 <package format="3">
   <name>assembly_robot</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Package for controlling one of the robot arms used in the BatteryLab system of the Amanchukwu Lab at the University of Chicago. Current maintainers can be found on the lab's GitHub page.</description>
   <maintainer email="yuanjian@uchicago.edu">yuanjian</maintainer>
   <license>TODO: License declaration</license>
 
